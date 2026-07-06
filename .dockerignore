@@ -1,0 +1,32 @@
+# Dependencies and build output (rebuilt inside the image)
+node_modules
+build
+dist
+*.tsbuildinfo
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Editor / OS cruft
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Docs and planning — not needed to build or run
+*.md
+docs
+
+# Large build-time-only artifacts (generator input, not a runtime dependency)
+formatted-spec.json
+
+# Local env / logs
+.env
+.env.*
+*.log
+npm-debug.log*
+
+# Claude Code workspace
+.claude

@@ -12,10 +12,63 @@ Model Context Protocol (MCP) server for Tenable Identity Exposure API.
 
 ## Installation
 
-```bash
-npm install
-npm run build
+The server runs as a local subprocess of your MCP client and communicates over
+stdio. Choose one of the following.
+
+### Option A — npx (recommended, once published)
+
+No local clone or build. Reference it directly from your MCP client config
+(see [Configuration](#configuration)):
+
+```json
+{ "command": "npx", "args": ["-y", "tie-mcp-server"] }
 ```
+
+### Option B — from source
+
+```bash
+git clone <repo-url> tie-mcp-server
+cd tie-mcp-server
+npm install        # also builds via the `prepare` script
+npm run build      # (re-run after any source change)
+```
+
+Then point your client at the built entry point, e.g.
+`node /absolute/path/to/tie-mcp-server/build/index.js`.
+
+### Option C — Docker
+
+A multi-stage `Dockerfile` is provided for users who prefer not to install
+Node locally. Build the image:
+
+```bash
+docker build -t tie-mcp-server .
+```
+
+Because the server speaks MCP over stdio, the container must be run
+interactively (`-i`) with credentials passed as environment variables:
+
+```json
+{
+  "command": "docker",
+  "args": [
+    "run", "-i", "--rm",
+    "-e", "TIE_BASE_URL",
+    "-e", "TIE_API_KEY",
+    "tie-mcp-server"
+  ],
+  "env": {
+    "TIE_BASE_URL": "https://customer.tenable.ad",
+    "TIE_API_KEY": "your-api-key-here"
+  }
+}
+```
+
+> **Note:** This is a per-user local tool using **stdio** transport, so Docker
+> Compose is not applicable (there is no long-running network service to
+> orchestrate). Docker is offered only to bundle the Node runtime. If you need
+> a centrally-hosted, multi-client gateway, that requires switching to MCP's
+> HTTP/SSE transport first — see [Hosting as a shared service](#hosting-as-a-shared-service).
 
 ## Configuration
 
@@ -212,6 +265,20 @@ update_deviance({
 })
 ```
 
+## Hosting as a shared service
+
+This server currently uses **stdio** transport: the MCP client spawns it as a
+local child process. That model is correct for a per-user desktop tool and is
+why distribution is via npm/npx (or a plain Docker image), not Docker Compose.
+
+To instead run one **centrally-hosted** instance that many remote clients
+connect to, the server would need to switch to MCP's streamable **HTTP/SSE**
+transport (replacing `StdioServerTransport` in `src/index.ts` with the HTTP
+server transport and adding a listening port). At that point it becomes a
+standing network service, and Docker — optionally with Compose behind a reverse
+proxy for TLS and authentication — becomes the appropriate deployment. This is
+a deliberate, separate change and is not implemented today.
+
 ## API Documentation
 
 - [API Endpoints](API_ENDPOINTS.md)
@@ -221,4 +288,4 @@ update_deviance({
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

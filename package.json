@@ -7,6 +7,11 @@
   "bin": {
     "tie-mcp-server": "build/index.js"
   },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
@@ -14,11 +19,13 @@
     "generate:client": "openapi-typescript identity-exposure-openapi.json -o src/generated/api-types.ts",
     "generate:tools": "node scripts/generate-tools.mjs",
     "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "tenable",
     "identity-exposure",
     "security",
@@ -26,10 +33,12 @@
   ],
   "author": "taherkaraki <mtaher@gmail.com>",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "axios": "^1.7.9",
-    "zod": "^3.24.1"
+    "axios": "^1.7.9"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

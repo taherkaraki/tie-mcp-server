@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:developer.tenable.com)"
+      "WebFetch(domain:developer.tenable.com)",
+      "Bash(git add *)"
     ]
   }
 }

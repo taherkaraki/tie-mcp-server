@@ -33,6 +33,14 @@
   ],
   "author": "taherkaraki <mtaher@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taherkaraki/tie-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/taherkaraki/tie-mcp-server/issues"
+  },
+  "homepage": "https://github.com/taherkaraki/tie-mcp-server#readme",
   "publishConfig": {
     "access": "public"
   },

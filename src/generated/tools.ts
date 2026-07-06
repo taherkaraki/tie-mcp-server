@@ -1643,7 +1643,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "list_deviances",
+    "name": "list_deviances_by_directory",
     "description": "Get all deviances for a directory.",
     "category": "Deviance",
     "safety": "read",
@@ -1715,7 +1715,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "get_deviance_by_infrastructure",
+    "name": "get_deviance_by_directory",
     "description": "Get ad-object-deviance-history instance by id.",
     "category": "Deviance",
     "safety": "read",
@@ -1808,7 +1808,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "list_deviances_by_profile",
+    "name": "list_deviances_by_directory_and_checker",
     "description": "Get all deviances related to a single directory and checker.",
     "category": "Deviance",
     "safety": "read",
@@ -1869,10 +1869,10 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "create_deviance",
+    "name": "list_deviances_by_checker",
     "description": "Get all deviances by checker.",
     "category": "Deviance",
-    "safety": "write",
+    "safety": "read",
     "method": "post",
     "path": "/api/profiles/{profileId}/checkers/{checkerId}/deviances",
     "pathParams": [
@@ -1946,7 +1946,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "update_deviance_by_profile",
+    "name": "update_deviances_by_checker",
     "description": "Update instances matching a checkerId.",
     "category": "Deviance",
     "safety": "write",
@@ -2005,10 +2005,10 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "create_deviance_by_profile",
+    "name": "search_deviances_by_ad_object",
     "description": "Search all deviances by profile by checker by AD object",
     "category": "Deviance",
-    "safety": "write",
+    "safety": "read",
     "method": "post",
     "path": "/api/profiles/{profileId}/checkers/{checkerId}/ad-objects/{adObjectId}/deviances",
     "pathParams": [
@@ -2083,7 +2083,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "update_deviance_by_profile_2",
+    "name": "update_deviances_by_ad_object",
     "description": "Update the deviances emitted on a specific AD object and for a specific checker.",
     "category": "Deviance",
     "safety": "write",
@@ -2171,10 +2171,10 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "create_deviance_by_profile_2",
+    "name": "list_deviances_by_event",
     "description": "Get all deviances by eventId.",
     "category": "Deviance",
-    "safety": "write",
+    "safety": "read",
     "method": "post",
     "path": "/api/profiles/{profileId}/infrastructures/{infrastructureId}/directories/{directoryId}/events/{eventId}/deviances",
     "pathParams": [
@@ -3156,7 +3156,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "get_event_by_infrastructure",
+    "name": "get_event_by_directory",
     "description": "Get event instance by id.",
     "category": "Event",
     "safety": "read",
@@ -4091,7 +4091,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "list_reasons_by_profile",
+    "name": "list_reasons_by_checker",
     "description": "Retrieve all reason instances that have deviances for a specific profile and checker.",
     "category": "Reason",
     "safety": "read",
@@ -4125,7 +4125,7 @@ export const tools: ToolDescriptor[] = [
     }
   },
   {
-    "name": "list_reasons_by_profile_2",
+    "name": "list_reasons_by_event",
     "description": "Retrieve all reason instances for which we have deviances for a specific profile, directory and event.",
     "category": "Reason",
     "safety": "read",

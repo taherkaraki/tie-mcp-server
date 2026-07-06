@@ -5,7 +5,15 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(npm --version)",
-      "Bash(npm search *)"
+      "Bash(npm search *)",
+      "mcp__tie__list_profiles",
+      "mcp__tie__list_infrastructures",
+      "mcp__tie__list_attacks",
+      "mcp__tie__list_attack_types",
+      "mcp__tie__list_categories",
+      "mcp__tie__list_deviances",
+      "mcp__tie__list_checkers",
+      "mcp__tie__get_checker"
     ]
   }
 }

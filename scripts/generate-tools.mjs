@@ -85,6 +85,20 @@ const NAME_OVERRIDES = {
   'GET /api/export/profiles/{profileId}/checkers/{checkerId}': 'export_checker_data',
   'PATCH /api/profiles/{profileId}/alerts': 'update_profile_alerts',
   'GET /api/profiles/{profileId}/alerts': 'list_profile_alerts',
+  // Deviance query endpoints — several use POST for reads (filter body). Name
+  // them by the resource they are scoped to so callers can tell them apart.
+  'GET /api/infrastructures/{infrastructureId}/directories/{directoryId}/deviances':
+    'list_deviances_by_directory',
+  'GET /api/profiles/{profileId}/infrastructures/{infrastructureId}/directories/{directoryId}/checkers/{checkerId}/deviances':
+    'list_deviances_by_directory_and_checker',
+  'POST /api/profiles/{profileId}/checkers/{checkerId}/deviances': 'list_deviances_by_checker',
+  'PATCH /api/profiles/{profileId}/checkers/{checkerId}/deviances': 'update_deviances_by_checker',
+  'POST /api/profiles/{profileId}/checkers/{checkerId}/ad-objects/{adObjectId}/deviances':
+    'search_deviances_by_ad_object',
+  'PATCH /api/profiles/{profileId}/checkers/{checkerId}/ad-objects/{adObjectId}/deviances':
+    'update_deviances_by_ad_object',
+  'POST /api/profiles/{profileId}/infrastructures/{infrastructureId}/directories/{directoryId}/events/{eventId}/deviances':
+    'list_deviances_by_event',
 };
 
 /**
@@ -107,6 +121,21 @@ function endsWithParam(path) {
 /** Extract ordered path params, e.g. ["directoryId","id"]. */
 function pathParams(path) {
   return [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
+}
+
+/**
+ * A human-readable "scope" for disambiguating colliding names: the nearest
+ * meaningful enclosing path parameter with its "Id" suffix stripped, e.g.
+ * checkerId -> "checker", eventId -> "event", adObjectId -> "ad_object". The
+ * generic "id" param is skipped in favour of a more specific one. Falls back to
+ * the first literal path segment, then "2".
+ */
+function nearestScope(pParams, path) {
+  const meaningful = pParams.filter((p) => p !== 'id');
+  const chosen = meaningful.length ? meaningful[meaningful.length - 1] : pParams[pParams.length - 1];
+  if (chosen) return toSnake(chosen.replace(/Id$/, ''));
+  const segs = literalSegments(path);
+  return segs.length > 1 ? singularize(toSnake(segs[0])) : '2';
 }
 
 /**
@@ -161,7 +190,12 @@ function deriveName(method, path, op) {
       verb = endsWithParam(path) ? 'get' : 'list';
       break;
     case 'post':
-      verb = 'create';
+      // Several TIE endpoints use POST for *reads* — they carry a filter body
+      // but return existing data (their summaries start with "Get all ..." or
+      // "Search ..."). Naming these `create_` would be wrong and, because the
+      // safety tier is derived from the name prefix, would also misclassify
+      // them as `write`. Detect the read intent from the summary instead.
+      verb = postReadVerb(op) ?? 'create';
       break;
     case 'patch':
       verb = 'update';
@@ -176,9 +210,20 @@ function deriveName(method, path, op) {
       verb = method;
   }
 
-  // list_ uses the plural resource; everything else the singular.
-  const noun = verb === 'list' ? plural : singular;
+  // list_ and search_ use the plural resource; everything else the singular.
+  const noun = verb === 'list' || verb === 'search' ? plural : singular;
   return { base: `${verb}_${noun}` };
+}
+
+/**
+ * If a POST operation is really a read (its summary begins with a query verb),
+ * return the appropriate read verb; otherwise null (a genuine create).
+ */
+function postReadVerb(op) {
+  const summary = (op.summary || '').trim().toLowerCase();
+  if (/^search\b/.test(summary)) return 'search';
+  if (/^(get|list|retrieve|fetch)\b/.test(summary)) return 'list';
+  return null;
 }
 
 /** Build a JSON-Schema-ish input schema object for the tool. */
@@ -249,17 +294,17 @@ function main() {
 
       const { base } = deriveName(method, path, op);
 
-      // Resolve collisions deterministically by qualifying with the parent
-      // resource in the path (singularized), e.g. two "list_deviances" become
-      // list_deviances and list_deviances_by_profile. A numeric suffix is the
-      // last resort when even that collides.
+      // Resolve collisions deterministically by qualifying with the nearest
+      // enclosing path parameter (the resource the operation is scoped to),
+      // e.g. two "list_deviances" become list_deviances and
+      // list_deviances_by_checker. Falls back to the first path segment, then a
+      // numeric suffix, when no path param is available.
       let name = base;
       if (taken.has(base)) {
-        const segs = literalSegments(path);
-        const parent = segs.length > 1 ? singularize(toSnake(segs[0])) : '2';
-        name = `${base}_by_${parent}`;
+        const scope = nearestScope(pParams, path);
+        name = `${base}_by_${scope}`;
         let n = 2;
-        while (taken.has(name)) name = `${base}_by_${parent}_${n++}`;
+        while (taken.has(name)) name = `${base}_by_${scope}_${n++}`;
       }
       taken.add(name);
 

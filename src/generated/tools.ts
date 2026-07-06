@@ -144,7 +144,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "get_ad_object_by_checker",
-    "description": "Retrieve an AD object by id that have deviances for a specific profile and checker",
+    "description": "Retrieve an AD object by id that have deviances for a specific profile and checker Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "AD object",
     "safety": "read",
     "method": "get",
@@ -297,7 +297,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "search_ad_objects",
-    "description": "Search all AD objects having deviances by profile by checker",
+    "description": "Search all AD objects having deviances by profile by checker Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "AD object",
     "safety": "read",
     "method": "post",
@@ -461,7 +461,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_profile_alerts",
-    "description": "Retrieve all alert instances.",
+    "description": "Retrieve all alert instances. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Alert",
     "safety": "read",
     "method": "get",
@@ -524,7 +524,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "update_profile_alerts",
-    "description": "Update alerts for one profile",
+    "description": "Update alerts for one profile Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Alert",
     "safety": "write",
     "method": "patch",
@@ -732,7 +732,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_attacks",
-    "description": "Get all attacks",
+    "description": "Get all attacks Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Attack",
     "safety": "read",
     "method": "get",
@@ -829,7 +829,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "export_attacks",
-    "description": "Get all attacks in CSV rows format",
+    "description": "Get all attacks in CSV rows format Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Attack",
     "safety": "read",
     "method": "get",
@@ -1012,7 +1012,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_attack_type_options",
-    "description": "Get all the attack type options related to a profile and attack type.",
+    "description": "Get all the attack type options related to a profile and attack type. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Attack type option",
     "safety": "read",
     "method": "get",
@@ -1057,7 +1057,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "create_attack_type_option",
-    "description": "Create attack type options related to a profile and attack type.",
+    "description": "Create attack type options related to a profile and attack type. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Attack type option",
     "safety": "write",
     "method": "post",
@@ -1234,7 +1234,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_checker_options",
-    "description": "Get all the checker options related to a profile and checker.",
+    "description": "Get all the checker options related to a profile and checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Checker option",
     "safety": "read",
     "method": "get",
@@ -1278,7 +1278,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "create_checker_option",
-    "description": "Create checker options related to a profile and checker.",
+    "description": "Create checker options related to a profile and checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Checker option",
     "safety": "write",
     "method": "post",
@@ -1599,7 +1599,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "export_checker_data",
-    "description": "Get all ad objects of a deviance in CSV rows format",
+    "description": "Get all ad objects of a deviance in CSV rows format Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "read",
     "method": "get",
@@ -1809,7 +1809,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_deviances_by_directory_and_checker",
-    "description": "Get all deviances related to a single directory and checker.",
+    "description": "Get all deviances related to a single directory and checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "read",
     "method": "get",
@@ -1870,7 +1870,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_deviances_by_checker",
-    "description": "Get all deviances by checker.",
+    "description": "Get all deviances by checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "read",
     "method": "post",
@@ -1947,7 +1947,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "update_deviances_by_checker",
-    "description": "Update instances matching a checkerId.",
+    "description": "Update instances matching a checkerId. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "write",
     "method": "patch",
@@ -2006,7 +2006,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "search_deviances_by_ad_object",
-    "description": "Search all deviances by profile by checker by AD object",
+    "description": "Search all deviances by profile by checker by AD object Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "read",
     "method": "post",
@@ -2084,7 +2084,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "update_deviances_by_ad_object",
-    "description": "Update the deviances emitted on a specific AD object and for a specific checker.",
+    "description": "Update the deviances emitted on a specific AD object and for a specific checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "write",
     "method": "patch",
@@ -2172,7 +2172,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_deviances_by_event",
-    "description": "Get all deviances by eventId.",
+    "description": "Get all deviances by eventId. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Deviance",
     "safety": "read",
     "method": "post",
@@ -4092,7 +4092,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_reasons_by_checker",
-    "description": "Retrieve all reason instances that have deviances for a specific profile and checker.",
+    "description": "Retrieve all reason instances that have deviances for a specific profile and checker. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Reason",
     "safety": "read",
     "method": "get",
@@ -4126,7 +4126,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "list_reasons_by_event",
-    "description": "Retrieve all reason instances for which we have deviances for a specific profile, directory and event.",
+    "description": "Retrieve all reason instances for which we have deviances for a specific profile, directory and event. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Reason",
     "safety": "read",
     "method": "get",
@@ -4647,7 +4647,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "get_profile_scores",
-    "description": "Get the directories score by profile",
+    "description": "Get the directories score by profile Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Score",
     "safety": "read",
     "method": "get",
@@ -5453,7 +5453,7 @@ export const tools: ToolDescriptor[] = [
   },
   {
     "name": "get_profile_topology",
-    "description": "Get a representation of the AD topology.",
+    "description": "Get a representation of the AD topology. Note: profileId selects a configuration profile (a lens, not a container). If the user has not specified a profile, call get_preferred_profile (or get_preferences) and use preferredProfileId — do not assume profile 1.",
     "category": "Topology",
     "safety": "read",
     "method": "get",

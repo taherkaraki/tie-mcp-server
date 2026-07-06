@@ -49,6 +49,18 @@ function singularize(word) {
 }
 
 /**
+ * Guidance appended to every profile-scoped tool's description. TIE profiles
+ * are configuration lenses (one is preferred), not containers — querying the
+ * wrong profile silently returns empty results. Steer callers to the preferred
+ * profile when the user hasn't named one. Baked in at generation time so it
+ * survives `npm run generate:tools`.
+ */
+const PROFILE_SCOPE_HINT =
+  ' Note: profileId selects a configuration profile (a lens, not a container). ' +
+  'If the user has not specified a profile, call get_preferred_profile (or ' +
+  'get_preferences) and use preferredProfileId — do not assume profile 1.';
+
+/**
  * Explicit overrides keyed by "METHOD /path". These capture the intent from
  * TOOL_NAMING_CONVENTION.md for cases the generic rules can't infer:
  * singleton resources (GET-one, so `get_` not `list_`), semantic
@@ -308,9 +320,14 @@ function main() {
       }
       taken.add(name);
 
+      const baseDescription = op.summary || op.description || name;
+      const description = path.includes('{profileId}')
+        ? baseDescription + PROFILE_SCOPE_HINT
+        : baseDescription;
+
       tools.push({
         name,
-        description: op.summary || op.description || name,
+        description,
         category: op.tags?.[0] || 'General',
         safety: safetyTier(name),
         method,

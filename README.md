@@ -5,6 +5,7 @@ Model Context Protocol (MCP) server for Tenable Identity Exposure API.
 ## Features
 
 - Complete coverage of all 131 TIE API operations (one MCP tool per endpoint)
+- Additional convenience tools for discovery and navigation (2 custom tools)
 - Client-side credential management for security
 - Multi-tenant support (multiple TIE environments)
 - Granular tool-level security controls
@@ -220,23 +221,53 @@ src/
 ├── config.ts             # Environment configuration
 ├── client.ts             # HTTP client for TIE API (axios)
 ├── dispatch.ts           # Generic descriptor -> HTTP request dispatcher
+├── custom-tools.ts       # Hand-written convenience/discovery tools
 └── generated/            # Auto-generated — do not edit by hand
     └── tools.ts          # 131 ToolDescriptor entries (name, method, path, schema)
 ```
 
-Regenerate `src/generated/tools.ts` whenever the TIE API spec changes:
+### Generated vs Custom Tools
+
+**Generated tools** (`src/generated/tools.ts`): One-to-one mappings of TIE API
+endpoints. Regenerate whenever the TIE API spec changes:
 
 ```bash
 npm run generate:tools
 ```
 
+**Custom tools** (`src/custom-tools.ts`): Hand-written convenience tools that
+compose multiple API calls or provide discovery/navigation helpers. These survive
+regeneration and are merged with generated tools at server startup.
+
+Current custom tools:
+- **`get_topology`** - Returns Infrastructure→Directory hierarchy tree
+- **`get_preferred_profile`** - Returns user's default profile from preferences
+
+Custom tools follow the same `CustomTool` interface (`{name, description, category, 
+safety, inputSchema, handler}`) and are dispatched alongside generated tools.
+
 ## Available Tools
 
-`src/generated/tools.ts` is the source of truth for all 131 tools. See
-[TOOL_NAMING_CONVENTION.md](TOOL_NAMING_CONVENTION.md) for the naming scheme and
+The server exposes **133 tools total**:
+- **131 generated tools** from `src/generated/tools.ts` (one per TIE API endpoint)
+- **2 custom tools** from `src/custom-tools.ts` (convenience/discovery helpers)
+
+See [TOOL_NAMING_CONVENTION.md](TOOL_NAMING_CONVENTION.md) for the naming scheme and
 the (historical) 88-endpoint reference list.
 
-### Examples
+### Discovery Tools
+
+```typescript
+// Get user's preferred profile (from preferences)
+get_preferred_profile()
+// Returns: { preferredProfileId: 2, preferredProfileName: "Contoso" }
+
+// Get infrastructure→directory topology tree
+get_topology()
+// Returns: [{ id, name, directories: [{id, name, status}] }]
+```
+
+### Generated Tool Examples
 
 ```typescript
 // Get system information

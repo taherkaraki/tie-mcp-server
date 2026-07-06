@@ -7,23 +7,44 @@ Building an MCP (Model Context Protocol) server for Tenable Identity Exposure AP
 
 ## Current State
 
-### ✅ Completed Work
-1. **Project planning and architecture** - Documented in markdown files
-2. **TypeScript project structure** - package.json, tsconfig.json, source files
-3. **Core implementation files** - HTTP client, config loader, MCP server
-4. **Tool generator** - `scripts/generate-tools.mjs` parses the OpenAPI spec and emits `src/generated/tools.ts` (131 descriptors). Re-run with `npm run generate:tools`.
-5. **Generic dispatcher** - `src/dispatch.ts` turns any descriptor + args into an HTTP call. No per-endpoint handler code.
-6. **Server wired** - `src/index.ts` registers all 131 tools and routes calls. Supports `TIE_ALLOWED_SAFETY` env var (e.g. `read` / `read,write`) to filter by risk tier.
-7. **Git repository** - Initialized with commits documenting progress
+Fully built and working. `npm install` done, `npm run build` clean, published to
+npm as **tie-mcp-server@0.1.1**, GitHub repo at
+https://github.com/taherkaraki/tie-mcp-server (public). PR #1 (deviance naming
+fix) merged.
 
-### ⏳ Remaining (blocked on `npm install` only)
-- `npm install` must be run in a normal terminal (Claude's sandbox blocks the npm registry). Node v26.4.0 / npm 11.17.0 confirmed working.
-- After install: `npm run build` (tsc), then integration-test against a real TIE instance.
-- All `.ts` files pass Node's native type-strip syntax check; a full `tsc` typecheck is pending `node_modules`.
+### ✅ Completed Work
+1. **Tool generator** - `scripts/generate-tools.mjs` parses the OpenAPI spec -> `src/generated/tools.ts` (131 descriptors). Re-run with `npm run generate:tools`.
+2. **Generic dispatcher** - `src/dispatch.ts` turns any descriptor + args into an HTTP call.
+3. **Server** - `src/index.ts` registers tools and routes calls. `TIE_ALLOWED_SAFETY` env var (e.g. `read` / `read,write`) filters by risk tier.
+4. **Packaging** - npm publish config, MIT LICENSE, multi-stage Dockerfile, .dockerignore. Docker image NOT build-verified (no daemon access in sandbox).
+5. **POST-read fix (PR #1, merged)** - deviance POST endpoints that read (summary "Get all…"/"Search…") now named list_/search_ with `read` safety instead of create_/write. `list_deviances_by_checker` etc.
+
+### 🔨 IN PROGRESS — branch `feat/discovery-tools` (NOT committed, NOT pushed)
+Adding discovery/convenience tools to fix a real usage problem: the model queried
+the wrong profile, got empty results, didn't know other profiles held data.
+
+**TIE data model (corrected understanding — critical):**
+- **Topology axis (real containment):** Infrastructure (Forest) → Directory (Domain).
+- **Configuration axis (lenses, NOT containers):** Profile → per-checker options → customizations. A profile is a selectable *view*; one is "preferred". `profileId` in a path means "view this forest/domain through this config lens", NOT that the profile owns the infrastructure.
+- Checker option = `{codename, value, valueType, directoryId}`. `directoryId: null` = global/default customization; `directoryId: <number>` = targeted at a specific domain (one customization can target an array of domains).
+- **Preferred profile** = `preferredProfileId` from `GET /api/preferences` (returns `{language, preferredProfileId}`). This is the correct default profile.
+- `GET /api/directories` returns `infrastructureId` + `infrastructureName` on each domain (so topology needs no manual join).
+
+**Done on this branch (all compiling, build clean, smoke-tested = 133 tools):**
+- `src/custom-tools.ts` — NEW. `CustomTool` interface `{name, description, category, safety, inputSchema, handler}`. Two tools:
+  - `get_topology` — `list_infrastructures` + `list_directories` → Forest→Domain tree with IDs. read.
+  - `get_preferred_profile` — `get_preferences` → preferredProfileId + name from `list_profiles`. read.
+- `scripts/generate-tools.mjs` — added `PROFILE_SCOPE_HINT` appended to description of any tool whose path contains `{profileId}` (22 tools). Steers model to preferred profile. Baked in at generation time so it survives regeneration.
+- `src/generated/tools.ts` — regenerated with the hints.
+- `src/index.ts` — `filterTools` now generic; merges `customTools` + generated; custom handlers dispatch first, else generic `dispatchTool`. Startup log counts both.
+
+**REMAINING on this branch (Task #12):**
+1. Update README architecture section to document `src/custom-tools.ts` (the regeneration-safe home for non-1:1 tools).
+2. Commit on `feat/discovery-tools`, push, open PR. (git push / gh MUST run in user's terminal — sandbox network egress is proxy-blocked to non-Anthropic hosts, incl. github.com and npm registry.)
 
 ### 📁 Repository Location
 ```
-/Users/taher/Downloads/TIE_MCP
+/Users/taher/Downloads/TIE_MCP   (branch: feat/discovery-tools)
 ```
 
 ## Key Decisions Made

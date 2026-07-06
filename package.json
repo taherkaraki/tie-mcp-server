@@ -12,6 +12,7 @@
     "watch": "tsc --watch",
     "dev": "tsx src/index.ts",
     "generate:client": "openapi-typescript identity-exposure-openapi.json -o src/generated/api-types.ts",
+    "generate:tools": "node scripts/generate-tools.mjs",
     "prepare": "npm run build",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"

@@ -4,11 +4,11 @@ Model Context Protocol (MCP) server for Tenable Identity Exposure API.
 
 ## Features
 
-- Complete coverage of all 88 TIE API endpoints
+- Complete coverage of all 131 TIE API operations (one MCP tool per endpoint)
 - Client-side credential management for security
 - Multi-tenant support (multiple TIE environments)
 - Granular tool-level security controls
-- Auto-generated from OpenAPI specification
+- Auto-generated tool definitions from the OpenAPI specification
 
 ## Installation
 
@@ -76,7 +76,10 @@ For multiple TIE environments, add multiple server instances:
 # Install dependencies
 npm install
 
-# Generate TypeScript types from OpenAPI spec
+# Regenerate tool definitions from the OpenAPI spec (writes src/generated/tools.ts)
+npm run generate:tools
+
+# (Optional) Generate TypeScript API types from the OpenAPI spec
 npm run generate:client
 
 # Build the project
@@ -122,32 +125,63 @@ Organizations can filter tools by operation type for granular security control:
 }
 ```
 
-Tool categories by risk level:
-- 🟢 **Safe (Read-Only)**: `get_*`, `list_*`, `search_*`, `export_*`
-- 🟡 **Moderate**: `create_*`, `update_*`, `patch_*`, `set_*`
-- 🔴 **Dangerous**: `delete_*`, `unstage_*`
+Tool categories by risk level (the `safety` field on each generated descriptor):
+- 🟢 **read** (70 tools): `get_*`, `list_*`, `search_*`, `export_*`
+- 🟡 **write** (51 tools): `create_*`, `update_*`, `set_*`, plus actions like `commit_*`, `login`
+- 🔴 **destructive** (10 tools): `delete_*`, `unstage_*`
+
+#### Server-side safety filter
+
+Beyond the client's `allowedTools`/`deniedTools`, the server itself honors a
+`TIE_ALLOWED_SAFETY` environment variable. Set it to a comma-separated list of
+tiers to advertise only those tools — e.g. `read` for a strictly read-only
+deployment, or `read,write` to disable destructive operations entirely:
+
+```json
+{
+  "mcpServers": {
+    "tie-readonly": {
+      "command": "node",
+      "args": ["/path/to/tie-mcp-server/build/index.js"],
+      "env": {
+        "TIE_BASE_URL": "https://customer.tenable.ad",
+        "TIE_API_KEY": "key",
+        "TIE_ALLOWED_SAFETY": "read"
+      }
+    }
+  }
+}
+```
 
 ## Architecture
 
+Rather than hand-writing a handler per endpoint, tool definitions are generated
+from the OpenAPI spec into a single data file, and one generic dispatcher turns
+any descriptor + arguments into an HTTP request.
+
 ```
+scripts/
+└── generate-tools.mjs    # Parses the OpenAPI spec -> src/generated/tools.ts
 src/
-├── index.ts              # Main MCP server entry point
+├── index.ts              # MCP server: registers tools, routes calls
 ├── config.ts             # Environment configuration
-├── client.ts             # HTTP client for TIE API
-├── generated/            # Auto-generated from OpenAPI spec
-│   └── api-types.ts      # TypeScript types
-├── tools/                # MCP tool implementations
-│   ├── index.ts          # Tool registry
-│   ├── about.ts          # About tools
-│   ├── attacks.ts        # Attack tools
-│   ├── deviances.ts      # Deviance tools
-│   └── ...               # Other tool categories
-└── utils/                # Shared utilities
+├── client.ts             # HTTP client for TIE API (axios)
+├── dispatch.ts           # Generic descriptor -> HTTP request dispatcher
+└── generated/            # Auto-generated — do not edit by hand
+    └── tools.ts          # 131 ToolDescriptor entries (name, method, path, schema)
+```
+
+Regenerate `src/generated/tools.ts` whenever the TIE API spec changes:
+
+```bash
+npm run generate:tools
 ```
 
 ## Available Tools
 
-See [TOOL_NAMING_CONVENTION.md](TOOL_NAMING_CONVENTION.md) for the complete list of 88 tools.
+`src/generated/tools.ts` is the source of truth for all 131 tools. See
+[TOOL_NAMING_CONVENTION.md](TOOL_NAMING_CONVENTION.md) for the naming scheme and
+the (historical) 88-endpoint reference list.
 
 ### Examples
 

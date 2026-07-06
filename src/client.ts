@@ -7,10 +7,8 @@ import type { TIEConfig } from './config.js';
 
 export class TIEClient {
   private client: AxiosInstance;
-  private config: TIEConfig;
 
   constructor(config: TIEConfig) {
-    this.config = config;
     this.client = axios.create({
       baseURL: config.baseUrl,
       timeout: config.timeout,

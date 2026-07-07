@@ -61,7 +61,11 @@ export const customTools: CustomTool[] = [
       'IDs of the forests or domains you need to query.',
     category: 'Discovery',
     safety: 'read',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
     async handler(client) {
       const [infras, dirs] = await Promise.all([
         client.get<Infrastructure[]>('/api/infrastructures'),
@@ -104,7 +108,11 @@ export const customTools: CustomTool[] = [
       'profile. Prevents querying the wrong profile and getting empty results.',
     category: 'Discovery',
     safety: 'read',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
     async handler(client) {
       const prefs = await client.get<Preferences>('/api/preferences');
       const preferredProfileId = prefs.preferredProfileId ?? null;

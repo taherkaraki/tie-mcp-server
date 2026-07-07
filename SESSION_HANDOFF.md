@@ -7,10 +7,9 @@ Building an MCP (Model Context Protocol) server for Tenable Identity Exposure AP
 
 ## Current State
 
-Fully built and working. `npm install` done, `npm run build` clean, published to
-npm as **tie-mcp-server@0.1.1**, GitHub repo at
-https://github.com/taherkaraki/tie-mcp-server (public). PR #1 (deviance naming
-fix) merged.
+Fully built, working, and published as **tie-mcp-server@0.2.1**. GitHub repo at
+https://github.com/taherkaraki/tie-mcp-server (public). PRs #1 (deviance naming
+fix) and #2 (discovery tools) merged. **133 tools total** (131 generated + 2 custom).
 
 ### ✅ Completed Work
 1. **Tool generator** - `scripts/generate-tools.mjs` parses the OpenAPI spec -> `src/generated/tools.ts` (131 descriptors). Re-run with `npm run generate:tools`.
@@ -18,33 +17,30 @@ fix) merged.
 3. **Server** - `src/index.ts` registers tools and routes calls. `TIE_ALLOWED_SAFETY` env var (e.g. `read` / `read,write`) filters by risk tier.
 4. **Packaging** - npm publish config, MIT LICENSE, multi-stage Dockerfile, .dockerignore. Docker image NOT build-verified (no daemon access in sandbox).
 5. **POST-read fix (PR #1, merged)** - deviance POST endpoints that read (summary "Get all…"/"Search…") now named list_/search_ with `read` safety instead of create_/write. `list_deviances_by_checker` etc.
+6. **Discovery tools (PR #2, merged; v0.2.0)** - `src/custom-tools.ts` with `get_topology` + `get_preferred_profile`; profile scope hints baked onto 22 `{profileId}` tools; `src/index.ts` merges custom + generated tools (custom handlers dispatch first, else generic `dispatchTool`). README architecture section documents the custom-tools home.
+7. **Schema fix (v0.2.1)** - added `additionalProperties: false` to custom tool input schemas (JSON Schema draft 2020-12 compliance; fixes Claude Desktop "400 ... input_schema is invalid").
 
-### 🔨 IN PROGRESS — branch `feat/discovery-tools` (NOT committed, NOT pushed)
-Adding discovery/convenience tools to fix a real usage problem: the model queried
-the wrong profile, got empty results, didn't know other profiles held data.
+### 📚 Reference — TIE data model (keep for future work)
 
-**TIE data model (corrected understanding — critical):**
+The discovery tools were built from this understanding; retained as context.
+
 - **Topology axis (real containment):** Infrastructure (Forest) → Directory (Domain).
 - **Configuration axis (lenses, NOT containers):** Profile → per-checker options → customizations. A profile is a selectable *view*; one is "preferred". `profileId` in a path means "view this forest/domain through this config lens", NOT that the profile owns the infrastructure.
 - Checker option = `{codename, value, valueType, directoryId}`. `directoryId: null` = global/default customization; `directoryId: <number>` = targeted at a specific domain (one customization can target an array of domains).
 - **Preferred profile** = `preferredProfileId` from `GET /api/preferences` (returns `{language, preferredProfileId}`). This is the correct default profile.
 - `GET /api/directories` returns `infrastructureId` + `infrastructureName` on each domain (so topology needs no manual join).
 
-**Done on this branch (all compiling, build clean, smoke-tested = 133 tools):**
-- `src/custom-tools.ts` — NEW. `CustomTool` interface `{name, description, category, safety, inputSchema, handler}`. Two tools:
+**Implementation notes (as shipped):**
+- `src/custom-tools.ts` — `CustomTool` interface `{name, description, category, safety, inputSchema, handler}`. Two tools:
   - `get_topology` — `list_infrastructures` + `list_directories` → Forest→Domain tree with IDs. read.
   - `get_preferred_profile` — `get_preferences` → preferredProfileId + name from `list_profiles`. read.
-- `scripts/generate-tools.mjs` — added `PROFILE_SCOPE_HINT` appended to description of any tool whose path contains `{profileId}` (22 tools). Steers model to preferred profile. Baked in at generation time so it survives regeneration.
-- `src/generated/tools.ts` — regenerated with the hints.
-- `src/index.ts` — `filterTools` now generic; merges `customTools` + generated; custom handlers dispatch first, else generic `dispatchTool`. Startup log counts both.
+- `scripts/generate-tools.mjs` — `PROFILE_SCOPE_HINT` appended to the description of any tool whose path contains `{profileId}` (22 tools). Baked in at generation time so it survives regeneration.
 
-**REMAINING on this branch (Task #12):**
-1. Update README architecture section to document `src/custom-tools.ts` (the regeneration-safe home for non-1:1 tools).
-2. Commit on `feat/discovery-tools`, push, open PR. (git push / gh MUST run in user's terminal — sandbox network egress is proxy-blocked to non-Anthropic hosts, incl. github.com and npm registry.)
+> **Note on git/network:** git push / gh / npm publish MUST run in the user's terminal — Claude's command sandbox egress is proxy-blocked to non-Anthropic hosts (incl. github.com and the npm registry).
 
 ### 📁 Repository Location
 ```
-/Users/taher/Downloads/TIE_MCP   (branch: feat/discovery-tools)
+/Users/taher/Downloads/TIE_MCP   (branch: main)
 ```
 
 ## Key Decisions Made
@@ -52,9 +48,9 @@ the wrong profile, got empty results, didn't know other profiles held data.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Language | TypeScript | MCP SDK support, type safety |
-| Architecture | One tool per endpoint (88 tools) | Granular security filtering |
+| Architecture | One tool per operation (131 generated + 2 custom = 133) | Granular security filtering |
 | Authentication | Client-side env vars | Security - no credentials in server |
-| Scope | Complete (all 88 endpoints) | Full API coverage |
+| Scope | Complete (all 131 operations) | Full API coverage |
 | Code Generation | Auto-generate from OpenAPI | Maintainability, accuracy |
 
 ## Important Files
@@ -76,49 +72,40 @@ the wrong profile, got empty results, didn't know other profiles held data.
 - `identity-exposure-openapi.json` - Full OpenAPI spec (261KB)
 - `API_ENDPOINTS.md` - All 88 endpoints documented
 
-## Next Steps (In Order)
+## Possible Next Steps
 
-### 1. Install Dependencies (REQUIRED — run in a normal terminal)
-The tool generator and dispatcher are already written; the only blocker is that
-Claude's command sandbox cannot reach registry.npmjs.org. Run this yourself:
-```bash
-cd /Users/taher/Downloads/TIE_MCP
-npm install
-```
-Packages: `@modelcontextprotocol/sdk`, `axios`, `zod` + dev tools (TypeScript, ESLint, tsx, openapi-typescript).
+The project is shipped; there is no required work outstanding. Optional follow-ups:
 
-### 2. Build & Typecheck
-```bash
-npm run typecheck   # tsc --noEmit — first real full typecheck
-npm run build       # emits build/index.js
-```
-If `tsc` reports type errors, they'll most likely be in `src/dispatch.ts` or the
-generated schema shape — fix and re-run.
+### Integration test against a live TIE instance
+Add to Claude Code / MCP client config with real `TIE_BASE_URL` + `TIE_API_KEY`
+and exercise a few tools (`get_about`, `list_profiles`, `list_checkers`,
+`get_topology`, `get_preferred_profile`).
 
-### 3. (Optional) Regenerate tools if the API spec changes
+### Regenerate tools if the API spec changes
 ```bash
 npm run generate:tools   # rewrites src/generated/tools.ts from the OpenAPI spec
+npm run build
 ```
+Custom tools in `src/custom-tools.ts` and the profile scope hints survive regeneration.
 
-### 4. Integration Test
-Add to Claude Code / MCP client config with real `TIE_BASE_URL` + `TIE_API_KEY`
-and exercise a few tools (`get_about`, `list_profiles`, `list_checkers`).
-
-### 5. (Optional) Generate API response types
+### (Optional) Generate API response types
 ```bash
 npm run generate:client   # src/generated/api-types.ts via openapi-typescript
 ```
 
+### (Optional) HTTP/SSE transport
+For a centrally-hosted, multi-client deployment, switch from stdio to MCP's
+HTTP/SSE transport — see README "Hosting as a shared service".
+
 ## Git Repository Info
 - **Branch**: main
-- **Remote**: Not configured yet
-- **Last Commit**: "Document Netskope npm issue and project status"
+- **Remote**: https://github.com/taherkaraki/tie-mcp-server (public)
+- **Latest Release**: v0.2.1
 - **Git User**: taherkaraki <mtaher@gmail.com>
 
 ## Environment Requirements
 - Node.js 18+ (currently v26.4.0)
 - npm or compatible package manager
-- Access to npm registry (currently blocked)
 - TIE instance credentials for testing (TIE_BASE_URL, TIE_API_KEY)
 
 ## Critical Context
@@ -146,23 +133,15 @@ npm run generate:client   # src/generated/api-types.ts via openapi-typescript
 ### Type Generation
 **Build-time only** - generate once from OpenAPI spec, commit to git. Not needed at runtime. Re-run only when TIE API updates.
 
-## Estimated Time Remaining
-- Phase 2 (types): 10 minutes
-- Phase 3 (tool generation): 2-3 hours
-- Phase 4 (integration): 1 hour  
-- Phase 5 (testing): 1-2 hours
-- **Total**: ~5-7 hours after npm access restored
-
-## Questions to Ask User
-1. Do you have access to a TIE instance for testing?
-2. Can you get IT to whitelist npm registry, or should we use alternative network?
-3. Any specific TIE API endpoints to prioritize?
+## Open Questions
+1. Is there access to a live TIE instance for integration testing?
+2. Any specific TIE API endpoints/workflows to prioritize for further custom tools?
 
 ## Contact
 - **Project Owner**: taherkaraki <mtaher@gmail.com>
 - **Started**: 2026-07-06
-- **Last Session**: 2026-07-06
+- **Last Session**: 2026-07-07
 
 ---
 
-**Bottom Line**: Project foundation is solid.
+**Bottom Line**: Shipped as v0.2.1 — 133 tools, published to npm, repo public.

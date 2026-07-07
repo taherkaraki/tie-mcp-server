@@ -20,8 +20,9 @@
     "generate:tools": "node scripts/generate-tools.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
-    "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "lint": "eslint src tests --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "keywords": [
     "mcp",

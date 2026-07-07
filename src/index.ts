@@ -20,21 +20,9 @@ import {
 import { loadConfig } from './config.js';
 import { TIEClient } from './client.js';
 import { dispatchTool } from './dispatch.js';
+import { filterTools } from './filter.js';
 import { tools, type ToolDescriptor } from './generated/tools.js';
 import { customTools, type CustomTool } from './custom-tools.js';
-
-/**
- * Optional allowlist / denylist for tool exposure, controlled via env vars:
- *   TIE_ALLOWED_SAFETY  e.g. "read" or "read,write" (default: all tiers)
- * This lets operators disable destructive tools without code changes.
- * Applies to both generated and custom tools (both expose a `safety` tier).
- */
-function filterTools<T extends { safety: string }>(all: T[]): T[] {
-  const allowed = process.env.TIE_ALLOWED_SAFETY;
-  if (!allowed) return all;
-  const tiers = new Set(allowed.split(',').map((s) => s.trim()).filter(Boolean));
-  return all.filter((t) => tiers.has(t.safety));
-}
 
 async function main() {
   const config = loadConfig();

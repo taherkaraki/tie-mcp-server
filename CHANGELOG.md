@@ -46,3 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.0]: https://github.com/taherkaraki/tie-mcp-server/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/taherkaraki/tie-mcp-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/taherkaraki/tie-mcp-server/releases/tag/v0.1.0
+
+## [0.2.1] - 2026-07-07
+
+### Fixed
+- **JSON Schema Validation Error**: Added `additionalProperties: false` to custom tool input schemas to comply with JSON Schema draft 2020-12 specification
+- Resolves "API Error: 400 tools.168.custom.input_schema: JSON schema is invalid" in Claude Desktop
+
+[0.2.1]: https://github.com/taherkaraki/tie-mcp-server/compare/v0.2.0...v0.2.1

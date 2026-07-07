@@ -60,7 +60,6 @@ The discovery tools were built from this understanding; retained as context.
 - `PROJECT_PLAN.md` - Overall plan and decisions
 - `AUTHENTICATION.md` - Security model and credential flow
 - `IMPLEMENTATION_PLAN.md` - Phase-by-phase development plan
-- `NETSKOPE_NPM_FIX.md` - Solving the npm blocker
 
 ### Source Code
 - `src/index.ts` - MCP server entry point

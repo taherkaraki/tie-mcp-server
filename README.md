@@ -252,7 +252,7 @@ The server exposes **133 tools total**:
 - **131 generated tools** from `src/generated/tools.ts` (one per TIE API endpoint)
 - **2 custom tools** from `src/custom-tools.ts` (convenience/discovery helpers)
 
-See [TOOL_NAMING_CONVENTION.md](TOOL_NAMING_CONVENTION.md) for the naming scheme and
+See [TOOL_NAMING_CONVENTION.md](docs/TOOL_NAMING_CONVENTION.md) for the naming scheme and
 the (historical) 88-endpoint reference list.
 
 ### Discovery Tools
@@ -312,10 +312,10 @@ a deliberate, separate change and is not implemented today.
 
 ## API Documentation
 
-- [API Endpoints](API_ENDPOINTS.md)
-- [Tool Naming Convention](TOOL_NAMING_CONVENTION.md)
-- [Authentication](AUTHENTICATION.md)
-- [Architecture Options](ARCHITECTURE_OPTIONS.md)
+- [API Endpoints](docs/API_ENDPOINTS.md)
+- [Tool Naming Convention](docs/TOOL_NAMING_CONVENTION.md)
+- [Authentication](docs/AUTHENTICATION.md)
+- [Architecture Options](docs/ARCHITECTURE_OPTIONS.md)
 
 ## License
 

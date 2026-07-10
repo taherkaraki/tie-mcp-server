@@ -593,4 +593,74 @@ export const customTools: CustomTool[] = [
       };
     },
   },
+  {
+    name: 'get_tier0',
+    description:
+      'Control-graph analysis: compute the DERIVED Tier-0 set — not just the ' +
+      'well-known privileged groups (Domain Admins, Enterprise Admins, ' +
+      'Administrators, Schema Admins), but every principal that can *become* ' +
+      'privileged by chaining control edges (e.g. WriteDacl on a group whose ' +
+      'members are Domain Admins). Each derived member carries the shortest ' +
+      'escalation path to a privileged seed, showing exactly how it reaches ' +
+      'Tier-0. Answers "what is my true Tier-0 attack surface?". Facts only. ' +
+      'Requires the control graph; the first graph call builds it.',
+    category: 'Graph',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxDepth: {
+          type: 'integer',
+          description: `Max escalation hops to consider (default ${DEFAULT_MAX_DEPTH}).`,
+          minimum: 1,
+        },
+        maxNodes: {
+          type: 'integer',
+          description: `Cap on derived members returned (default ${DEFAULT_MAX_NODES}).`,
+          minimum: 1,
+        },
+      },
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : undefined;
+      const maxNodes = typeof args.maxNodes === 'number' ? args.maxNodes : undefined;
+      const store = getStore(client);
+      const g = await ensureGraph(store, ctx?.reportProgress);
+      if ('notReady' in g) return g.notReady;
+
+      const seeds = new Set(g.graph.tier0Seeds());
+      if (seeds.size === 0) {
+        return {
+          error: 'No well-known privileged groups found in the graph',
+          note: 'The snapshot may not include the privileged group objects.',
+        };
+      }
+
+      // Reverse-reachability from the seeds: each reached node is a de facto
+      // Tier-0 member, and its inbound path is the escalation route.
+      const res = reachable(g.graph, [...seeds], 'reverse', { maxDepth, maxNodes });
+
+      const builtin = [...seeds].map((k) => ({
+        node: { key: k, name: g.graph.node(k)?.name ?? null, type: g.graph.node(k)?.type ?? null },
+      }));
+      const derived = res.reached.map((r) => ({
+        node: r.node,
+        hops: r.depth,
+        // Path is seed -> ... -> member (reverse traversal); reverse it so it
+        // reads member -> ... -> seed (the escalation direction).
+        escalationPath: [...r.path].reverse(),
+      }));
+
+      return {
+        graph: store.graphStatus().stats,
+        truncated: res.truncated,
+        builtinCount: builtin.length,
+        derivedCount: derived.length,
+        tier0Total: builtin.length + derived.length,
+        builtin,
+        derived,
+      };
+    },
+  },
 ];

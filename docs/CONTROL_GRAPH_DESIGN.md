@@ -235,9 +235,11 @@ Small memory cost.
 ### Defining "Tier-0" (target set for exposure)
 `targets` accepts explicit principals **or** a named preset:
 - `"domain-admins"` — DA/EA/DCsync-capable well-known set.
-- `"tier0-derived"` (default) — computed *by the graph*: anything with a control
-  path to DA/EA/DCSync/domain-root. Catches *de facto* Tier-0 (not in a
-  privileged group but trivially able to become privileged).
+- `"tier0-derived"` (DONE — see `get_tier0` + `derivedTier0` in traverse.ts):
+  computed *by the graph* as reverse-reachability from the privileged seeds —
+  anything with a control path to a privileged group. Catches *de facto* Tier-0
+  (not in a privileged group but trivially able to become privileged); each
+  member carries its shortest escalation path.
 - explicit DNs/SIDs — exposure of any arbitrary asset (a file server, a service
   account, an OU), since exposure isn't only a Tier-0 question.
 

@@ -10,6 +10,7 @@ import { ControlGraph } from '../src/graph/graph.js';
 import {
   reachable,
   shortestPath,
+  derivedTier0,
   DEFAULT_MAX_DEPTH,
 } from '../src/graph/traverse.js';
 import type { StoredADObject } from '../src/ad-object-store.js';
@@ -147,4 +148,31 @@ test('cycles do not cause infinite traversal', () => {
   // B reachable; A is the start (not re-listed); terminates.
   assert.ok(res.reached.some((r) => r.node.key === 's-1-5-21-9-9-9-2'));
   assert.equal(res.truncated, null);
+});
+
+test('derivedTier0 includes seeds plus everyone who can reach them', () => {
+  // Domain Admins (-512) is the only seed; bob, Helpdesk, and dcadmin all have
+  // inbound control paths, so all are de facto Tier-0. (Local System S-1-5-18
+  // also appears: it owns dcadmin via the SDDL owner field, a real Owns edge.)
+  const g = chain();
+  const { keys, truncated } = derivedTier0(g, ['s-1-5-21-1-2-3-512']);
+  assert.equal(truncated, null);
+  assert.ok(keys.includes('s-1-5-21-1-2-3-512')); // seed itself
+  assert.ok(keys.includes('s-1-5-21-1-2-3-1105')); // dcadmin
+  assert.ok(keys.includes('s-1-5-21-1-2-3-1200')); // Helpdesk
+  assert.ok(keys.includes('s-1-5-21-1-2-3-2000')); // bob
+});
+
+test('derivedTier0 with no seeds returns empty', () => {
+  const g = chain();
+  assert.deepEqual(derivedTier0(g, []), { keys: [], truncated: null });
+});
+
+test('derivedTier0 respects maxDepth and reports truncation', () => {
+  const g = chain();
+  // Depth 1 from the seed only reaches its direct controllers (dcadmin).
+  const { keys, truncated } = derivedTier0(g, ['s-1-5-21-1-2-3-512'], { maxDepth: 1 });
+  assert.ok(keys.includes('s-1-5-21-1-2-3-1105')); // dcadmin, depth 1
+  assert.ok(!keys.includes('s-1-5-21-1-2-3-2000')); // bob is 3 hops away
+  assert.equal(truncated, 'depth');
 });

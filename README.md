@@ -149,6 +149,10 @@ get_control_paths({ from: "bob", to: "Domain Admins" })
 // Reverse: who can reach this asset / the Tier-0 set?
 get_asset_exposure({})                       // Tier-0 preset (privileged groups)
 get_asset_exposure({ targets: ["CN=FileServer01,..."] })
+
+// Derived Tier-0: privileged groups PLUS everyone who can become privileged,
+// each with its escalation path. "What is my true Tier-0 attack surface?"
+get_tier0({})
 ```
 
 Notes and honest limits:
@@ -455,11 +459,11 @@ safety, inputSchema, handler}`) and are dispatched alongside generated tools.
 
 ## Available Tools
 
-The server exposes **138 tools total**:
+The server exposes **139 tools total**:
 - **131 generated tools** from `src/generated/tools.ts` (one per TIE API endpoint)
-- **7 custom tools** from `src/custom-tools.ts` (`get_topology`,
+- **8 custom tools** from `src/custom-tools.ts` (`get_topology`,
   `get_preferred_profile`, `query_ad_objects`, `get_ad_object`,
-  `get_blast_radius`, `get_control_paths`, `get_asset_exposure`)
+  `get_blast_radius`, `get_control_paths`, `get_asset_exposure`, `get_tier0`)
 
 See [TOOL_NAMING_CONVENTION.md](docs/TOOL_NAMING_CONVENTION.md) for the naming scheme and
 the (historical) 88-endpoint reference list.

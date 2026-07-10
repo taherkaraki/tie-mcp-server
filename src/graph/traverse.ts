@@ -157,3 +157,28 @@ export function shortestPath(
   if (hit) return { path: hit.path, depth: hit.depth };
   return { path: null, truncated: result.truncated };
 }
+
+/**
+ * Compute the DERIVED Tier-0 set: the well-known privileged seeds PLUS every
+ * principal that can reach a seed by chaining control edges. These "de facto
+ * Tier-0" principals aren't in a privileged group but can trivially become
+ * privileged (e.g. WriteDacl on a group whose members are DA), so defenders
+ * must treat them as Tier-0 too.
+ *
+ * Implementation: reverse-reachability from the seeds (who can reach them) unioned
+ * with the seeds themselves. Bounded by the same maxDepth/maxNodes guardrails; a
+ * truncated traversal returns a partial (still-safe) set and reports it.
+ */
+export function derivedTier0(
+  graph: ControlGraph,
+  seeds: string[],
+  opts: TraverseOptions = {}
+): { keys: string[]; truncated: TraverseResult['truncated'] } {
+  const seedKeys = seeds.map((s) => s.toLowerCase());
+  const set = new Set<string>(seedKeys);
+  if (seedKeys.length === 0) return { keys: [], truncated: null };
+
+  const res = reachable(graph, seedKeys, 'reverse', opts);
+  for (const r of res.reached) set.add(r.node.key);
+  return { keys: [...set], truncated: res.truncated };
+}

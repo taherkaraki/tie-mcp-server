@@ -325,3 +325,26 @@ test('graph tools resolve a principal that does not exist to a not-found result'
   })) as { found: boolean };
   assert.equal(result.found, false);
 });
+
+test('get_tier0 reports built-in seeds plus derived de facto members', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_tier0').handler(client, {})) as {
+    builtinCount: number;
+    derivedCount: number;
+    tier0Total: number;
+    builtin: Array<{ node: { name: string | null } }>;
+    derived: Array<{ node: { name: string | null }; hops: number; escalationPath: Array<{ kind: string }> }>;
+  };
+
+  // Domain Admins (RID -512) is the built-in seed.
+  assert.ok(result.builtin.some((b) => b.node.name === 'Domain Admins'));
+  // WidgetGroup and bob can reach it, so they are derived Tier-0.
+  const derivedNames = result.derived.map((d) => d.node.name);
+  assert.ok(derivedNames.includes('WidgetGroup'));
+  assert.ok(derivedNames.includes('bob'));
+  assert.equal(result.tier0Total, result.builtinCount + result.derivedCount);
+
+  // The escalation path for bob reads member -> ... -> seed.
+  const bob = result.derived.find((d) => d.node.name === 'bob');
+  assert.ok(bob && bob.escalationPath.length === bob.hops);
+});

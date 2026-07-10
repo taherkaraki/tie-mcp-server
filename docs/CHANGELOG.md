@@ -42,9 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BFS shortest paths, `maxDepth`/`maxNodes` guardrails with honest `truncated`
   reporting, cycle-safe. The first graph query builds the graph on demand (so
   the tools work even without `TIE_BUILD_GRAPH`); a build still in flight
-  returns a `notReady` status rather than a misleading empty result. Total tool
-  count is now **138** (131 generated + 7 custom). Facts only — reachability and
-  edges, no severity scoring.
+  returns a `notReady` status rather than a misleading empty result. Facts
+  only — reachability and edges, no severity scoring.
+- **`get_tier0`** — computes the *derived* Tier-0 set: the well-known privileged
+  groups plus every principal that can *become* privileged by chaining control
+  edges (de facto Tier-0). Each derived member carries the shortest escalation
+  path to a privileged seed. Backed by a `derivedTier0` traversal helper
+  (reverse-reachability from the seeds). Total tool count is now **139**
+  (131 generated + 8 custom).
 
 ### Internal
 - `docs/CONTROL_GRAPH_DESIGN.md` — design for the planned control graph (attack

@@ -125,22 +125,48 @@ async function main() {
     `Registered ${activeCustomTools.length} custom + ${activeTools.length} of ${tools.length} generated tools`
   );
 
-  // Warm the AD-object snapshot in the background so the first search is fast
-  // (on by default; TIE_WARM_CACHE=false opts out). Fire-and-forget — failures
-  // are logged but must not crash the server, and the scan runs after connect()
-  // so it never delays startup.
-  if (config.warmCache) {
-    console.error('Warming AD object cache (set TIE_WARM_CACHE=false to disable)...');
-    getSharedStore(tieClient)
-      .warm(({ pages, objects }) => {
-        if (pages % 10 === 0) {
-          console.error(`  warmed ${objects} objects (${pages} pages)`);
-        }
+  // Background startup work (fire-and-forget; runs after connect() so it never
+  // delays startup, and failures are logged but never crash the server):
+  //   1. Warm the attribute snapshot (on by default; TIE_WARM_CACHE=false opts out).
+  //   2. Then, if TIE_BUILD_GRAPH=true, build the control graph — a distinct
+  //      second phase that starts only once the snapshot is warm, so attribute
+  //      search goes live first and graph analysis overlaps with real work.
+  if (config.warmCache || config.buildGraph) {
+    const store = getSharedStore(tieClient);
+    const warmStep = config.warmCache
+      ? (() => {
+          console.error('Warming AD object cache (set TIE_WARM_CACHE=false to disable)...');
+          return store
+            .warm(({ pages, objects }) => {
+              if (pages % 10 === 0) {
+                console.error(`  warmed ${objects} objects (${pages} pages)`);
+              }
+            })
+            .then(() => console.error('AD object cache warm.'));
+        })()
+      : Promise.resolve();
+
+    warmStep
+      .then(() => {
+        if (!config.buildGraph) return;
+        console.error('Building control graph (TIE_BUILD_GRAPH=true)...');
+        return store
+          .buildGraph(({ processed, total }) => {
+            if (processed % 10000 === 0 || processed === total) {
+              console.error(`  graph: ${processed}/${total} objects processed`);
+            }
+          })
+          .then(() => {
+            const s = store.graphStatus().stats;
+            console.error(
+              `Control graph ready: ${s?.nodes} nodes, ${s?.edges} edges` +
+                (s?.dangling ? ` (${s.dangling} out-of-scope refs)` : '')
+            );
+          });
       })
-      .then(() => console.error('AD object cache warm.'))
       .catch((err) =>
         console.error(
-          `AD object cache warm failed (will build on first query): ${
+          `Startup warm/graph build failed (will build lazily on demand): ${
             err instanceof Error ? err.message : String(err)
           }`
         )

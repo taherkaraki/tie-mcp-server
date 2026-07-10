@@ -24,6 +24,13 @@ export interface TIEConfig {
    * with TIE_CACHE_TTL_MS to trade freshness for scan cost.
    */
   cacheTtlMs?: number;
+  /**
+   * When true, build the control graph (attack-path / blast-radius / asset-
+   * exposure edges) in the background *after* the attribute snapshot warms. Off
+   * by default: it is tens of seconds of extra CPU + memory, wasted on sessions
+   * that don't do relationship analysis. Enable with TIE_BUILD_GRAPH=true.
+   */
+  buildGraph: boolean;
 }
 
 /**
@@ -54,5 +61,6 @@ export function loadConfig(): TIEConfig {
     cacheTtlMs: process.env.TIE_CACHE_TTL_MS
       ? parseInt(process.env.TIE_CACHE_TTL_MS, 10)
       : undefined,
+    buildGraph: process.env.TIE_BUILD_GRAPH === 'true',
   };
 }

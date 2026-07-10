@@ -256,16 +256,22 @@ Small memory cost.
 
 ## 8. Build order (separate PRs)
 
-1. **PR 1 — `sddl.ts` + `rights.ts` + `schema-map.ts`** with full unit tests and
-   live-tenant fixtures. The parser + decode foundation. Also delivers an
-   on-demand **`get_ad_object({ decodeSecurityDescriptor: true })`** decoder for
-   free (structured, SID-resolved, human-readable ACEs) — immediately useful,
-   independent of the graph.
-2. **PR 2 — `edges.ts` + `graph.ts`** (edge model, closure, bidirectional index)
-   behind `TIE_BUILD_GRAPH`, wired into the post-warm lifecycle with its own
-   progress notifications. No queries yet — just build + a `graphState` stat.
-3. **PR 3 — `traverse.ts` + tools** `get_blast_radius`, `get_control_paths`,
-   `get_asset_exposure` with `maxDepth`/`maxNodes` + truncation reporting.
+1. **PR 1 (DONE) — `sddl.ts` + `rights.ts` + `schema-map.ts` + `decode.ts`** with
+   full unit tests and a live-tenant-shaped fixture. The parser + decode
+   foundation. Also delivers the on-demand
+   **`get_ad_object({ decodeSecurityDescriptor: true })`** decoder — immediately
+   useful, independent of the graph.
+2. **PR 2 (DONE) — `edges.ts` + `graph.ts`** (multi-source edge model +
+   assembly with DN/SID resolution and bidirectional index) behind
+   `TIE_BUILD_GRAPH`, wired into the post-warm lifecycle with its own progress
+   logging and a `graphStatus()` state (absent/building/ready). No queries yet.
+   NOTE: transitive membership closure is done at *query time* by BFS following
+   `MemberOf` edges (PR 3), not materialized at build — precomputing it would be
+   redundant with traversal.
+3. **PR 3 (next) — `traverse.ts` + tools** `get_blast_radius`,
+   `get_control_paths`, `get_asset_exposure` with `maxDepth`/`maxNodes` +
+   truncation reporting, and the `graphState` "not ready yet" contract on the
+   tools.
 
 Rationale for splitting: the parser's edge-semantics tests are where the real
 correctness risk lives and deserve their own review, uncoupled from traversal.

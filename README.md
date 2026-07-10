@@ -222,6 +222,9 @@ Optional environment variables:
   [AD object search](#ad-object-search)).
 - `TIE_CACHE_TTL_MS` - How long the AD-object snapshot stays fresh, in ms
   (default `86400000`, i.e. 1 day). Lower it to trade scan cost for freshness.
+- `TIE_BUILD_GRAPH` - `true` to build the control graph (attack-path / blast-
+  radius / asset-exposure edges) in the background after the snapshot warms. Off
+  by default; adds CPU + memory. Query tools land in a later release.
 - `TIE_TIMEOUT` - Per-request timeout in ms (default `30000`).
 - `TIE_MAX_RETRIES` - Max request retries (default `3`).
 

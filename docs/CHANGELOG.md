@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   human-readable decoder).
 - Store now indexes objectSID→name and exposes `resolveSid`/`getSchemaMap`,
   rebuilt per snapshot generation.
+- **Control-graph edge model + assembly** (Phase 2; behind `TIE_BUILD_GRAPH=true`).
+  Derives typed control edges from BOTH plain attributes and the SDDL DACL/owner:
+  `MemberOf` (incl. `primaryGroupID`, the attr `member`/`memberof` omit), `Owns`,
+  `GenericAll`/`GenericWrite`/`WriteDacl`/`WriteOwner`, `AddMember` (WriteProperty
+  on the member attribute, distinguished from generic write), `ForceChangePassword`,
+  `AddKeyCredentialLink`, `DCSync` (both replication rights required), delegation
+  (`AllowedToDelegate`/`AllowedToAct`), `SIDHistory`, and `GpLink`. `graph.ts`
+  resolves DN/SID edge targets to nodes, keeps a **bidirectional** adjacency
+  index (so reverse/exposure traversal is as cheap as forward), and counts
+  out-of-scope/cross-domain references as `dangling` rather than dropping them.
+  Built in the background *after* the attribute snapshot warms (never gates
+  search), bound to the snapshot generation and invalidated on rebuild. Query
+  tools (blast radius / paths / exposure) land in Phase 3.
 
 ### Internal
 - `docs/CONTROL_GRAPH_DESIGN.md` — design for the planned control graph (attack

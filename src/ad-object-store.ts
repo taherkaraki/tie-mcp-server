@@ -24,6 +24,7 @@ import { normalizeAttributeValue, type NormalizedValue } from './query/value.js'
 import { parseQuery } from './query/parser.js';
 import { evaluate, type QueryRecord } from './query/evaluate.js';
 import { buildSchemaMap, type SchemaMap } from './graph/schema-map.js';
+import { ControlGraph, type GraphProgress } from './graph/graph.js';
 
 /** The raw ad-object shape returned by the API. */
 interface RawADObject {
@@ -76,6 +77,10 @@ export class ADObjectStore {
   private sidIndex = new Map<string, string>();
   /** Lazily built GUID -> schema name map (from the resident schema objects). */
   private schemaMap: SchemaMap | null = null;
+  /** Optional control graph, bound to the current snapshot generation. */
+  private graph: ControlGraph | null = null;
+  private graphState: 'absent' | 'building' | 'ready' = 'absent';
+  private graphBuilding: Promise<void> | null = null;
   private builtAt = 0;
   private building: Promise<void> | null = null;
   private readonly ttlMs: number;
@@ -174,6 +179,10 @@ export class ADObjectStore {
       }
     }
     this.schemaMap = null;
+
+    // A new snapshot invalidates any derived control graph.
+    this.graph = null;
+    this.graphState = 'absent';
   }
 
   /** Resolve an object SID to a display name from the resident snapshot. */
@@ -185,6 +194,44 @@ export class ADObjectStore {
   getSchemaMap(): SchemaMap {
     if (!this.schemaMap) this.schemaMap = buildSchemaMap(this.objects);
     return this.schemaMap;
+  }
+
+  /**
+   * Build the control graph from the current snapshot (opt-in; runs after warm).
+   * Ensures the snapshot is loaded first. Concurrent callers share one build.
+   * The graph is bound to this snapshot generation and invalidated on rebuild.
+   */
+  async buildGraph(onProgress?: GraphProgress): Promise<void> {
+    await this.ensureLoaded(false);
+    if (this.graphState === 'ready') return;
+    if (this.graphBuilding) return this.graphBuilding;
+
+    this.graphState = 'building';
+    this.graphBuilding = Promise.resolve()
+      .then(() => {
+        this.graph = ControlGraph.build(this.objects, onProgress);
+        this.graphState = 'ready';
+      })
+      .finally(() => {
+        this.graphBuilding = null;
+      });
+    return this.graphBuilding;
+  }
+
+  /** The control graph if ready, else null. */
+  getGraph(): ControlGraph | null {
+    return this.graphState === 'ready' ? this.graph : null;
+  }
+
+  /** Graph lifecycle state + stats, for tool responses. */
+  graphStatus(): {
+    state: 'absent' | 'building' | 'ready';
+    stats: ReturnType<ControlGraph['stats']> | null;
+  } {
+    return {
+      state: this.graphState,
+      stats: this.graphState === 'ready' && this.graph ? this.graph.stats() : null,
+    };
   }
 
   /** Flatten one raw object into identity fields + decoded attribute map. */

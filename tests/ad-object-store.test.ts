@@ -199,3 +199,28 @@ test('warm() builds the snapshot up front and is reused by later queries', async
   await store.query('type=LDAP');
   assert.equal(getCalls(), afterWarm, 'query after warm must not re-scan');
 });
+
+test('buildGraph builds after load and reports ready with stats', async () => {
+  const { client } = makePagingClient(sampleObjects);
+  const store = new ADObjectStore(client);
+
+  assert.equal(store.graphStatus().state, 'absent');
+  await store.buildGraph();
+  const status = store.graphStatus();
+  assert.equal(status.state, 'ready');
+  assert.ok(status.stats);
+  assert.ok(status.stats!.nodes >= 1);
+  assert.ok(store.getGraph() !== null);
+});
+
+test('a forced re-scan invalidates the control graph', async () => {
+  const { client } = makePagingClient(sampleObjects);
+  const store = new ADObjectStore(client);
+
+  await store.buildGraph();
+  assert.equal(store.graphStatus().state, 'ready');
+
+  await store.query('type=LDAP', { force: true }); // new snapshot generation
+  assert.equal(store.graphStatus().state, 'absent', 'graph invalidated on rebuild');
+  assert.equal(store.getGraph(), null);
+});

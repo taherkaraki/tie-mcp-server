@@ -120,6 +120,28 @@ function makeADObjectClient() {
       directoryId: 1,
       objectAttributes: [{ name: 'admincount', value: '0', valueType: 'integer' }],
     },
+    {
+      id: 3,
+      objectId: '1:guid-3',
+      type: 'LDAP',
+      directoryId: 1,
+      objectAttributes: [
+        { name: 'cn', value: '"Widget Group"', valueType: 'string' },
+        { name: 'samaccountname', value: '"WidgetGroup"', valueType: 'string' },
+        {
+          name: 'distinguishedname',
+          value: '"CN=Widget Group,OU=Groups,DC=alsid,DC=corp"',
+          valueType: 'string',
+        },
+        { name: 'objectsid', value: '"S-1-5-21-9-9-9-1500"', valueType: 'string' },
+        {
+          name: 'ntsecuritydescriptor',
+          value:
+            '"O:S-1-5-21-9-9-9-512G:S-1-5-21-9-9-9-512D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;S-1-1-0)"',
+          valueType: 'string',
+        },
+      ],
+    },
   ];
   const fake = {
     get(path: string) {
@@ -188,4 +210,28 @@ test('get_ad_object requires exactly one identifier', async () => {
   })) as { error?: string };
 
   assert.match(result.error ?? '', /exactly one/);
+});
+
+test('get_ad_object decodes the security descriptor on request', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_ad_object').handler(client, {
+    samAccountName: 'WidgetGroup',
+    decodeSecurityDescriptor: true,
+  })) as {
+    found: boolean;
+    securityDescriptor?: {
+      owner?: { name: string | null };
+      aces: Array<{ trustee: { name: string | null; broad: boolean }; rights: string[] }>;
+    };
+  };
+
+  assert.equal(result.found, true);
+  const sd = result.securityDescriptor!;
+  // Owner SID -512 resolves via the well-known RID fallback.
+  assert.equal(sd.owner?.name, 'Domain Admins');
+  // The Everyone full-control ACE is decoded, resolved, and flagged broad.
+  const ace = sd.aces[0];
+  assert.equal(ace.trustee.name, 'Everyone');
+  assert.equal(ace.trustee.broad, true);
+  assert.deepEqual(ace.rights, ['GenericAll']);
 });

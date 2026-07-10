@@ -34,6 +34,14 @@ turns the API into something an LLM can use effectively:
   `member:"dcadmin"` mean what you'd expect, and can be combined with
   `AND`/`OR`/`NOT`. The API returns everything as strings and offers no way to
   combine conditions at all.
+- **Security-descriptor decoding.** AD permissions live in the
+  `ntSecurityDescriptor` as a dense SDDL string (`O:...G:...D:(A;;CCDC...;;;S-1-...)`)
+  that is unreadable to a model and useless for reasoning. `get_ad_object` can
+  decode it on request into structured ACEs with **trustee SIDs resolved to
+  names** (from the resident snapshot), **rights named** (`GenericAll`,
+  `WriteDacl`, `ForceChangePassword`…), and **object-types resolved via the live
+  schema** — turning "who can control this object?" into a readable answer
+  instead of a 15 KB blob. See [Permission decoding](#permission-decoding).
 - **Composed discovery tools.** `get_topology` and `get_preferred_profile`
   answer "what forests/domains exist?" and "which profile should I use?" in one
   call each, instead of the model having to stitch together `/infrastructures`,
@@ -64,6 +72,46 @@ paging become single natural-language asks. A few that map directly onto
 - **Fast pivot on one object** — "show me everything about Domain Admins":
   `get_ad_object({ samAccountName: "Domain Admins" })`, then follow its `member`
   list into further queries — all served from the same cached snapshot.
+
+### Permission decoding
+
+`ntSecurityDescriptor` is where AD stores who-can-do-what, but it arrives as raw
+SDDL — a wall of ACE tokens and SIDs that no model can reason over. Pass
+`decodeSecurityDescriptor: true` to `get_ad_object` to get it back as structured,
+resolved facts:
+
+```jsonc
+get_ad_object({ samAccountName: "Domain Admins", decodeSecurityDescriptor: true })
+// -> securityDescriptor:
+{
+  "owner": { "sid": "S-1-5-...-512", "name": "Domain Admins" },
+  "aces": [
+    { "effect": "Allow", "trustee": { "sid": "S-1-1-0", "name": "Everyone", "broad": true },
+      "rights": ["ReadProperty"], "appliesTo": null, "inherited": true },
+    { "effect": "Allow", "trustee": { "sid": "S-1-5-...-1105", "name": "bob.shaft", "broad": false },
+      "rights": ["ControlAccess"], "appliesTo": "DS-Replication-Get-Changes-All" }
+  ]
+}
+```
+
+What the decoder does that a raw string can't:
+
+- **Resolves trustee SIDs to names** using the in-memory snapshot (every object's
+  SID is indexed), and flags broad principals (`Everyone`, `Authenticated Users`,
+  `Anonymous`) with `broad: true`.
+- **Names the rights** — `GenericAll`, `WriteDacl`, `WriteOwner`,
+  `ForceChangePassword`, `AddMember`, etc. — and collapses the full-control token
+  run to `GenericAll`.
+- **Resolves object-type GUIDs via the live schema** already in the store (e.g.
+  the two replication rights that together make up DCSync), so extended rights and
+  attributes show up by name.
+- Distinguishes **Allow / Deny**, marks **inherited** ACEs, and never throws on a
+  malformed descriptor.
+
+This is deliberately **facts, not verdicts** — it reports *who has which right*,
+and leaves severity to you or to Tenable's Indicators of Exposure. It is the
+foundation for planned cross-object analysis (attack paths, blast radius, asset
+exposure); see [docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
 
 ### Freshness and caching
 

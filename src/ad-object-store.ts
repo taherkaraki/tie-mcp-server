@@ -23,6 +23,7 @@ import type { TIEClient } from './client.js';
 import { normalizeAttributeValue, type NormalizedValue } from './query/value.js';
 import { parseQuery } from './query/parser.js';
 import { evaluate, type QueryRecord } from './query/evaluate.js';
+import { buildSchemaMap, type SchemaMap } from './graph/schema-map.js';
 
 /** The raw ad-object shape returned by the API. */
 interface RawADObject {
@@ -71,6 +72,10 @@ export type ScanProgress = (info: { pages: number; objects: number }) => void;
 
 export class ADObjectStore {
   private objects: StoredADObject[] = [];
+  /** objectSid (lower-case) -> display name, for resolving ACE trustees. */
+  private sidIndex = new Map<string, string>();
+  /** Lazily built GUID -> schema name map (from the resident schema objects). */
+  private schemaMap: SchemaMap | null = null;
   private builtAt = 0;
   private building: Promise<void> | null = null;
   private readonly ttlMs: number;
@@ -153,6 +158,33 @@ export class ADObjectStore {
     }
 
     this.objects = collected;
+
+    // Rebuild the SID index and invalidate the derived schema map so both
+    // reflect the new snapshot generation.
+    this.sidIndex = new Map();
+    for (const obj of collected) {
+      const sid = obj.record['objectsid'];
+      if (typeof sid === 'string') {
+        const name =
+          (typeof obj.record['samaccountname'] === 'string' &&
+            obj.record['samaccountname']) ||
+          (typeof obj.record['cn'] === 'string' && obj.record['cn']) ||
+          null;
+        if (name) this.sidIndex.set(sid.toLowerCase(), name as string);
+      }
+    }
+    this.schemaMap = null;
+  }
+
+  /** Resolve an object SID to a display name from the resident snapshot. */
+  resolveSid(sid: string): string | null {
+    return this.sidIndex.get(sid.toLowerCase()) ?? null;
+  }
+
+  /** GUID -> schema name map, built once per snapshot from resident objects. */
+  getSchemaMap(): SchemaMap {
+    if (!this.schemaMap) this.schemaMap = buildSchemaMap(this.objects);
+    return this.schemaMap;
   }
 
   /** Flatten one raw object into identity fields + decoded attribute map. */

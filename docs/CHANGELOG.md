@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-11
+
+### Added
+- **Security-descriptor (SDDL) decoding.** `get_ad_object` accepts
+  `decodeSecurityDescriptor: true` and returns the object's `ntSecurityDescriptor`
+  parsed into structured ACEs: trustee SIDs resolved to names (from the resident
+  snapshot), rights named (`GenericAll`, `WriteDacl`, `ForceChangePassword`, …,
+  with the full-control token run collapsed to `GenericAll`), object-type GUIDs
+  resolved via the live schema, allow/deny distinguished, inherited ACEs marked,
+  and broad principals (Everyone/Authenticated Users/Anonymous) flagged. Facts
+  only — no risk scoring. See docs/CONTROL_GRAPH_DESIGN.md.
+- New `src/graph/` module: `sddl.ts` (defensive SDDL parser, never throws),
+  `rights.ts` (right mnemonics, well-known SIDs/RIDs, extended-right GUIDs),
+  `schema-map.ts` (GUID→name map built from the schema objects already in the
+  store — no external tables, no extra API calls), and `decode.ts` (the
+  human-readable decoder).
+- Store now indexes objectSID→name and exposes `resolveSid`/`getSchemaMap`,
+  rebuilt per snapshot generation.
+
+### Internal
+- `docs/CONTROL_GRAPH_DESIGN.md` — design for the planned control graph (attack
+  paths, blast radius, asset exposure); this release ships its Phase-1 foundation
+  (SDDL parser + on-demand decoder). Test count 74 → 96.
+
 ## [0.3.1] - 2026-07-10
 
 ### Changed

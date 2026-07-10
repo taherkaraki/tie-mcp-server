@@ -24,6 +24,7 @@ import {
   type ScanProgress,
 } from './ad-object-store.js';
 import { QuerySyntaxError } from './query/lexer.js';
+import { decodeSecurityDescriptor } from './graph/decode.js';
 
 /**
  * Optional per-call context the server passes to a custom tool handler. Carries
@@ -278,7 +279,11 @@ export const customTools: CustomTool[] = [
       'the object with all of its attributes, or a not-found result. CACHING: the ' +
       'snapshot is cached for a long TTL (1 day by default; the response ' +
       '"snapshot" reports its age and ttlMs) and is NOT live — pass refresh:true ' +
-      'to force a fresh scan when current data is required.',
+      'to force a fresh scan when current data is required. Set ' +
+      'decodeSecurityDescriptor:true to also return the object\'s ' +
+      'ntSecurityDescriptor parsed into readable ACEs (trustee SIDs resolved to ' +
+      'names, rights and object-types named) — useful for inspecting who has ' +
+      'which permissions without hand-parsing SDDL.',
     category: 'Search',
     safety: 'read',
     inputSchema: {
@@ -297,6 +302,12 @@ export const customTools: CustomTool[] = [
           type: 'string',
           description: 'SAM account name, e.g. "Domain Admins".',
         },
+        decodeSecurityDescriptor: {
+          type: 'boolean',
+          description:
+            'Also return the ntSecurityDescriptor decoded into readable ACEs ' +
+            '(resolved trustees, named rights). Facts only, no risk scoring.',
+        },
         refresh: {
           type: 'boolean',
           description: 'Force a fresh full scan instead of the cached snapshot.',
@@ -309,6 +320,7 @@ export const customTools: CustomTool[] = [
       const sid = args.sid as string | undefined;
       const sam = args.samAccountName as string | undefined;
       const force = args.refresh === true;
+      const decode = args.decodeSecurityDescriptor === true;
 
       const provided = [dn, sid, sam].filter((v) => typeof v === 'string' && v);
       if (provided.length !== 1) {
@@ -332,7 +344,26 @@ export const customTools: CustomTool[] = [
       if (!obj) {
         return { found: false, searchedBy: by, value, snapshot: store.stats() };
       }
-      return { found: true, snapshot: store.stats(), object: presentObject(obj) };
+
+      const result: Record<string, unknown> = {
+        found: true,
+        snapshot: store.stats(),
+        object: presentObject(obj),
+      };
+
+      if (decode) {
+        const sddl = obj.record['ntsecuritydescriptor'];
+        result.securityDescriptor =
+          typeof sddl === 'string'
+            ? decodeSecurityDescriptor(
+                sddl,
+                (s) => store.resolveSid(s),
+                store.getSchemaMap()
+              )
+            : { error: 'Object has no ntSecurityDescriptor attribute' };
+      }
+
+      return result;
     },
   },
 ];

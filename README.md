@@ -65,16 +65,31 @@ paging become single natural-language asks. A few that map directly onto
   `get_ad_object({ samAccountName: "Domain Admins" })`, then follow its `member`
   list into further queries — all served from the same cached snapshot.
 
-> **First-query warm-up:** the first search in a ~10-minute window triggers the
-> full directory scan and can take several seconds to tens of seconds on a large
-> tenant (subsequent queries are milliseconds). Two things soften this:
+### Freshness and caching
+
+The snapshot is **cached for 1 day by default** (`TIE_CACHE_TTL_MS` to change
+it) and is **not live** — it reflects the directory as of the last scan. This is
+deliberate: a full scan is expensive, and AD/TIE state changes slowly relative to
+a working session, so cheap reuse is the right default. Consequences to know:
+
+- Every query/lookup response includes a `snapshot` block reporting the cache's
+  object `count`, `ageMs`, and `ttlMs`, and both tool descriptions tell the model
+  the data may be stale — so it can decide when currency matters.
+- **To force current data, pass `refresh: true`** on `query_ad_objects` or
+  `get_ad_object`. The classic trap: run a query, fix something in TIE, re-query,
+  and see the *old* data because you didn't refresh.
+- When the TTL lapses, the next query transparently rescans (no action needed).
+
+> **First-query warm-up:** the first search after startup (or after the TTL
+> lapses) triggers the full directory scan and can take several seconds to tens of
+> seconds on a large tenant; subsequent queries are milliseconds. Two things
+> soften this:
 >
 > - **Progress notifications.** If the MCP client attaches a `progressToken` to
 >   the call, the server emits `notifications/progress` once per fetched page
 >   (e.g. "Scanning AD objects: 12000 loaded (12 pages)"), so a long first scan
 >   isn't silent. Clients that don't request progress simply see one longer tool
->   call. Every response also includes a `snapshot` block with the cache's object
->   count and age.
+>   call.
 > - **Optional startup warming.** Set `TIE_WARM_CACHE=true` to have the server
 >   build the snapshot in the background at startup, so the first user query is
 >   already fast. It's off by default — the scan is wasted work for sessions that
@@ -155,6 +170,8 @@ Optional environment variables:
   `read,write`); see [Server-side safety filter](#server-side-safety-filter).
 - `TIE_WARM_CACHE` - `true` to build the AD-object search snapshot at startup
   instead of on first query (see [AD object search](#ad-object-search)).
+- `TIE_CACHE_TTL_MS` - How long the AD-object snapshot stays fresh, in ms
+  (default `86400000`, i.e. 1 day). Lower it to trade scan cost for freshness.
 - `TIE_TIMEOUT` - Per-request timeout in ms (default `30000`).
 - `TIE_MAX_RETRIES` - Max request retries (default `3`).
 

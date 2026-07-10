@@ -51,8 +51,13 @@ const PAGE_SIZE = 1000;
 /** Safety cap so a broken cursor can't loop forever. */
 const MAX_PAGES = 200;
 
+/** Default snapshot lifetime: 1 day. AD/TIE state changes slowly relative to a
+ * session, and a full rescan is expensive, so we favour cheap reuse and let
+ * callers pass `refresh: true` when they need current data. */
+export const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+
 export interface StoreOptions {
-  /** How long a built snapshot stays valid, in ms. Default 10 minutes. */
+  /** How long a built snapshot stays valid, in ms. Default {@link DEFAULT_TTL_MS}. */
   ttlMs?: number;
 }
 
@@ -74,7 +79,7 @@ export class ADObjectStore {
     private readonly client: TIEClient,
     options: StoreOptions = {}
   ) {
-    this.ttlMs = options.ttlMs ?? 10 * 60 * 1000;
+    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
   }
 
   /** True when we have a snapshot that hasn't expired (ttlMs of 0 is never fresh). */
@@ -225,12 +230,19 @@ export class ADObjectStore {
   }
 
   /** Snapshot metadata for diagnostics / tool responses. */
-  stats(): { count: number; builtAt: number; ageMs: number; fresh: boolean } {
+  stats(): {
+    count: number;
+    builtAt: number;
+    ageMs: number;
+    ttlMs: number;
+    fresh: boolean;
+  } {
     const now = Date.now();
     return {
       count: this.objects.length,
       builtAt: this.builtAt,
       ageMs: this.builtAt ? now - this.builtAt : -1,
+      ttlMs: this.ttlMs,
       fresh: this.isFresh(now),
     };
   }

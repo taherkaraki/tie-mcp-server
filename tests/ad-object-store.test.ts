@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ADObjectStore } from '../src/ad-object-store.js';
+import { ADObjectStore, DEFAULT_TTL_MS } from '../src/ad-object-store.js';
 import type { TIEClient } from '../src/client.js';
 
 interface RawAttr {
@@ -166,6 +166,26 @@ test('invalid expression rejects before any scan (fail fast)', async () => {
 
   await assert.rejects(() => store.query('admincount >')); // missing operand
   assert.equal(getCalls(), 0, 'must not scan when the expression is invalid');
+});
+
+test('default TTL is one day and is reported in stats', async () => {
+  const { client } = makePagingClient(sampleObjects);
+  const store = new ADObjectStore(client);
+  await store.query('type=LDAP');
+  const stats = store.stats();
+  assert.equal(DEFAULT_TTL_MS, 24 * 60 * 60 * 1000);
+  assert.equal(stats.ttlMs, DEFAULT_TTL_MS, 'stats should surface the TTL');
+  assert.equal(stats.fresh, true);
+});
+
+test('a configured TTL keeps the snapshot fresh across queries (no re-scan)', async () => {
+  const { client, getCalls } = makePagingClient(sampleObjects);
+  const store = new ADObjectStore(client, { ttlMs: 60_000 });
+  await store.query('type=LDAP');
+  const afterFirst = getCalls();
+  await store.query('admincount>0');
+  assert.equal(getCalls(), afterFirst, 'within TTL there must be no re-scan');
+  assert.equal(store.stats().ttlMs, 60_000);
 });
 
 test('warm() builds the snapshot up front and is reused by later queries', async () => {

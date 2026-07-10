@@ -25,6 +25,7 @@ import { tools, type ToolDescriptor } from './generated/tools.js';
 import {
   customTools,
   getSharedStore,
+  configureStore,
   type CustomTool,
   type ToolContext,
 } from './custom-tools.js';
@@ -32,6 +33,9 @@ import {
 async function main() {
   const config = loadConfig();
   const tieClient = new TIEClient(config);
+
+  // Inject cache configuration before any tool call creates the shared store.
+  configureStore({ ttlMs: config.cacheTtlMs });
 
   const activeTools = filterTools(tools);
   const activeCustomTools = filterTools(customTools);

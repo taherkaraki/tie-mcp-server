@@ -17,7 +17,12 @@
 
 import type { TIEClient } from './client.js';
 import type { ToolInputSchema } from './generated/tools.js';
-import { ADObjectStore, type StoredADObject, type ScanProgress } from './ad-object-store.js';
+import {
+  ADObjectStore,
+  type StoreOptions,
+  type StoredADObject,
+  type ScanProgress,
+} from './ad-object-store.js';
 import { QuerySyntaxError } from './query/lexer.js';
 
 /**
@@ -47,10 +52,21 @@ export interface CustomTool {
  * Lazily-built, process-wide AD object store. The server uses a single TIEClient
  * for its lifetime, so one store (bound to that client on first use) is shared
  * across every ad-object query/lookup call and its TTL cache is reused.
+ *
+ * `storeOptions` lets the server inject configuration (e.g. a TTL from
+ * TIE_CACHE_TTL_MS) before the store is first created; it must be set prior to
+ * any tool call to take effect. Absent config falls back to the store defaults.
  */
 let sharedStore: ADObjectStore | null = null;
+let storeOptions: StoreOptions = {};
+
+/** Configure the shared store before first use (called once at startup). */
+export function configureStore(options: StoreOptions): void {
+  storeOptions = options;
+}
+
 function getStore(client: TIEClient): ADObjectStore {
-  if (!sharedStore) sharedStore = new ADObjectStore(client);
+  if (!sharedStore) sharedStore = new ADObjectStore(client, storeOptions);
   return sharedStore;
 }
 
@@ -188,7 +204,11 @@ export const customTools: CustomTool[] = [
       'fields type, directoryId, objectId, id. String matching is ' +
       'case-insensitive. Multi-valued attributes match if ANY value matches; a ' +
       'missing attribute never matches. Example: ' +
-      '(admincount>0 AND useraccountcontrol:"NORMAL") OR badpwdcount>=5',
+      '(admincount>0 AND useraccountcontrol:"NORMAL") OR badpwdcount>=5. ' +
+      'CACHING: the snapshot is cached for a long TTL (1 day by default; the ' +
+      'response "snapshot" reports its age and ttlMs). It is NOT live — if the ' +
+      'directory may have changed, or the data must be current, pass ' +
+      'refresh:true to force a fresh scan.',
     category: 'Search',
     safety: 'read',
     inputSchema: {
@@ -255,7 +275,10 @@ export const customTools: CustomTool[] = [
       'Look up a single AD object by distinguished name, SID, or SAM account ' +
       'name, using the cached in-memory snapshot (no full re-scan per call). ' +
       'Provide exactly one of distinguishedName, sid, or samAccountName. Returns ' +
-      'the object with all of its attributes, or a not-found result.',
+      'the object with all of its attributes, or a not-found result. CACHING: the ' +
+      'snapshot is cached for a long TTL (1 day by default; the response ' +
+      '"snapshot" reports its age and ttlMs) and is NOT live — pass refresh:true ' +
+      'to force a fresh scan when current data is required.',
     category: 'Search',
     safety: 'read',
     inputSchema: {

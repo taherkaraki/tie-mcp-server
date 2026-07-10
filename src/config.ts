@@ -16,6 +16,12 @@ export interface TIEConfig {
    * setups). Enable with TIE_WARM_CACHE=true.
    */
   warmCache: boolean;
+  /**
+   * How long a built AD-object snapshot is considered fresh, in ms. After this
+   * the next query rescans. Undefined uses the store default (1 day). Override
+   * with TIE_CACHE_TTL_MS to trade freshness for scan cost.
+   */
+  cacheTtlMs?: number;
 }
 
 /**
@@ -42,5 +48,8 @@ export function loadConfig(): TIEConfig {
     timeout: process.env.TIE_TIMEOUT ? parseInt(process.env.TIE_TIMEOUT, 10) : 30000,
     maxRetries: process.env.TIE_MAX_RETRIES ? parseInt(process.env.TIE_MAX_RETRIES, 10) : 3,
     warmCache: process.env.TIE_WARM_CACHE === 'true',
+    cacheTtlMs: process.env.TIE_CACHE_TTL_MS
+      ? parseInt(process.env.TIE_CACHE_TTL_MS, 10)
+      : undefined,
   };
 }

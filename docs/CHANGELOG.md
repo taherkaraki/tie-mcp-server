@@ -20,10 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_ad_object` — look up a single object by `distinguishedName`, `sid`, or
     `samAccountName`.
 - **Cached object store** (`src/ad-object-store.ts`) — one full paginated scan
-  builds an in-memory snapshot (TTL-cached, default 10 min) that every query and
-  lookup reuses, so the directory is not re-paged on each request. Attributes are
-  decoded per `valueType` into typed values; identity fields (`type`,
-  `directoryId`, `objectId`, `id`) are queryable alongside attributes.
+  builds an in-memory snapshot (TTL-cached, default 1 day, configurable via
+  `TIE_CACHE_TTL_MS`) that every query and lookup reuses, so the directory is not
+  re-paged on each request. Attributes are decoded per `valueType` into typed
+  values; identity fields (`type`, `directoryId`, `objectId`, `id`) are queryable
+  alongside attributes. The snapshot is not live; pass `refresh: true` to force a
+  rescan. Every response's `snapshot` block reports `count`, `ageMs`, and `ttlMs`,
+  and both tool descriptions advertise the caching so the client knows when to
+  refresh.
 - **Scan progress notifications** — when the MCP client attaches a
   `progressToken`, `query_ad_objects`/`get_ad_object` emit
   `notifications/progress` once per fetched page during the initial scan, so a

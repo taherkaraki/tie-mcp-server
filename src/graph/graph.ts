@@ -60,6 +60,10 @@ export class ControlGraph {
   private byDn = new Map<string, string>();
   /** samAccountName (lower) -> node key, for lookup by SAM name. */
   private bySam = new Map<string, string>();
+  /** domain SID (lower, no RID) -> node keys of security principals in it. */
+  private principalsByDomain = new Map<string, string[]>();
+  /** node keys whose type is 'domain' (the domain-head hubs). */
+  private domainKeys: string[] = [];
   private dangling = 0;
   private builtMs = 0;
 
@@ -91,6 +95,26 @@ export class ControlGraph {
       if (dn) byDn.set(dn.toLowerCase(), key);
       if (sid) bySid.set(sid.toLowerCase(), key);
       if (sam) g.bySam.set(sam.toLowerCase(), key);
+    }
+
+    // Pass 1b: index domain heads and their in-domain security principals, so
+    // the virtual `Controls` expansion (traverse.ts) is O(1) per domain hop.
+    // A domain node's SID is the domain SID (no RID); a principal is in that
+    // domain when its SID is that domain SID + "-<rid>".
+    for (const [key, node] of g.nodes) {
+      if (node.type === 'domain' && node.sid) g.domainKeys.push(key);
+    }
+    const domainSids = g.domainKeys
+      .map((k) => g.nodes.get(k)!.sid!)
+      .sort((a, b) => b.length - a.length); // longest first for prefix match
+    for (const [key, node] of g.nodes) {
+      if (!node.sid || node.type === 'domain') continue;
+      const dom = domainSids.find((d) => node.sid!.startsWith(d + '-'));
+      if (dom) {
+        const list = g.principalsByDomain.get(dom);
+        if (list) list.push(key);
+        else g.principalsByDomain.set(dom, [key]);
+      }
     }
 
     // Pass 2: derive + resolve edges.
@@ -170,6 +194,49 @@ export class ControlGraph {
       if (node.sid === 's-1-5-32-544' || privRids.has(rid)) seeds.push(key);
     }
     return seeds;
+  }
+
+  /** True if `key` is a domain-head node (a `Controls` hub). */
+  isDomain(key: string): boolean {
+    return this.nodes.get(key.toLowerCase())?.type === 'domain';
+  }
+
+  /**
+   * The domain-head node key that controls `principalKey` (the domain whose SID
+   * is a prefix of the principal's SID), or null. Used by reverse traversal to
+   * treat domain compromise as an inbound predecessor of each in-domain object.
+   */
+  controllingDomainOf(principalKey: string): string | null {
+    const node = this.nodes.get(principalKey.toLowerCase());
+    if (!node?.sid || node.type === 'domain') return null;
+    for (const dk of this.domainKeys) {
+      const dsid = this.nodes.get(dk)!.sid!;
+      if (node.sid.startsWith(dsid + '-')) return dk;
+    }
+    return null;
+  }
+
+  /**
+   * Node keys of security principals in the domain whose head is `domainKey`
+   * (i.e. the objects a domain compromise `Controls`). Empty if not a domain or
+   * the domain has no in-scope principals.
+   */
+  principalsControlledBy(domainKey: string): readonly string[] {
+    const sid = this.nodes.get(domainKey.toLowerCase())?.sid;
+    if (!sid) return [];
+    return this.principalsByDomain.get(sid) ?? [];
+  }
+
+  /**
+   * Is `principalKey` a security principal controlled by domain `domainKey`?
+   * O(1) — used by targeted path-finding to synthesize a single Controls hop
+   * without enumerating the whole domain.
+   */
+  domainControls(domainKey: string, principalKey: string): boolean {
+    const domSid = this.nodes.get(domainKey.toLowerCase())?.sid;
+    const pSid = this.nodes.get(principalKey.toLowerCase())?.sid;
+    if (!domSid || !pSid) return false;
+    return pSid.startsWith(domSid + '-');
   }
 
   stats(): GraphStats {

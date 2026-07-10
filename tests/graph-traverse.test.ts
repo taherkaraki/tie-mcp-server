@@ -176,3 +176,66 @@ test('derivedTier0 respects maxDepth and reports truncation', () => {
   assert.ok(!keys.includes('s-1-5-21-1-2-3-2000')); // bob is 3 hops away
   assert.equal(truncated, 'depth');
 });
+
+// --- Phase 4b: virtual Controls expansion --------------------------------
+// A domain head + two in-domain principals; one (attacker) can DCSync the
+// domain, the other (victim) is just a member of the domain.
+function domainFixture(): ControlGraph {
+  const domain = obj(
+    { objectsid: 'S-1-5-21-1-2-3', cn: 'corp', samaccountname: 'corp',
+      distinguishedname: 'DC=corp', objectclass: ['top', 'domainDNS'],
+      // attacker holds both replication rights on the domain head -> DCSync.
+      ntsecuritydescriptor:
+        'D:(OA;;CR;1131f6aa-9c07-11d1-f79f-00c04fc2dcd2;;S-1-5-21-1-2-3-1105)' +
+        '(OA;;CR;1131f6ad-9c07-11d1-f79f-00c04fc2dcd2;;S-1-5-21-1-2-3-1105)' },
+    '1:dom'
+  );
+  const attacker = obj(
+    { objectsid: 'S-1-5-21-1-2-3-1105', cn: 'attacker', samaccountname: 'attacker',
+      distinguishedname: 'CN=attacker,DC=corp', objectclass: ['user'] },
+    '1:atk'
+  );
+  // Victim sits under a deep OU so it is NOT a direct child of the domain head;
+  // only the virtual Controls edge (not one-level Contains) should reach it.
+  // We omit the intervening OU objects so no Contains chain exists either.
+  const victim = obj(
+    { objectsid: 'S-1-5-21-1-2-3-2500', cn: 'crownjewel', samaccountname: 'crownjewel',
+      distinguishedname: 'CN=crownjewel,OU=Tier0,OU=Admins,DC=corp', objectclass: ['user'] },
+    '1:vic'
+  );
+  return ControlGraph.build([domain, attacker, victim], undefined, T);
+}
+
+test('Controls off by default: DCSync stops at the domain node', () => {
+  const g = domainFixture();
+  const res = reachable(g, ['s-1-5-21-1-2-3-1105'], 'forward'); // expandControls default 'off'
+  const keys = res.reached.map((r) => r.node.key);
+  assert.ok(keys.includes('s-1-5-21-1-2-3'), 'reaches the domain');
+  assert.ok(!keys.includes('s-1-5-21-1-2-3-2500'), 'does NOT reach the victim without expansion');
+});
+
+test('shortestPath completes A->B THROUGH domain compromise (toTargets)', () => {
+  const g = domainFixture();
+  const r = shortestPath(g, 's-1-5-21-1-2-3-1105', 's-1-5-21-1-2-3-2500');
+  assert.ok('depth' in r && r.path, 'victim reachable via domain compromise');
+  if (r.path) {
+    assert.deepEqual(r.path.map((s) => s.kind), ['DCSync', 'Controls']);
+    assert.equal(r.path[1].from.key, 's-1-5-21-1-2-3'); // Controls from the domain
+    assert.equal(r.path[1].to.key, 's-1-5-21-1-2-3-2500');
+  }
+});
+
+test('expandControls:all reaches every in-domain principal (blast radius)', () => {
+  const g = domainFixture();
+  const res = reachable(g, ['s-1-5-21-1-2-3-1105'], 'forward', { expandControls: 'all' });
+  const keys = res.reached.map((r) => r.node.key);
+  assert.ok(keys.includes('s-1-5-21-1-2-3-2500'), 'blast radius includes the victim');
+});
+
+test('reverse Controls: victim exposed to whoever can DCSync its domain', () => {
+  const g = domainFixture();
+  const res = reachable(g, ['s-1-5-21-1-2-3-2500'], 'reverse', { expandControls: 'all' });
+  const keys = res.reached.map((r) => r.node.key);
+  assert.ok(keys.includes('s-1-5-21-1-2-3'), 'reaches the controlling domain (reverse)');
+  assert.ok(keys.includes('s-1-5-21-1-2-3-1105'), 'and the DCSync attacker behind it');
+});

@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-11
+
+### Added (control graph, Phase 4b — behind `TIE_BUILD_GRAPH`)
+- **Virtual `Controls` edge** (domain → in-domain principal), synthesized at
+  query time and never stored. This is the "domain compromise controls
+  everything in the domain" primitive that lets attack paths continue *through*
+  domain takeover to a specific target, e.g.
+  `unpriv → GPO → OU → user → DCSync → domain → Controls → Administrator`.
+- **Target-aware expansion** (`TraverseOptions.expandControls`): `off` (default),
+  `toTargets` (synthesize only toward given targets — O(1) per domain, used by
+  `get_control_paths` so A→B completes through domain compromise without
+  enumerating the domain), and `all` (every in-domain principal, bounded by
+  `maxNodes`, used by `get_blast_radius` and the reverse exposure / `get_tier0`
+  tools). Reverse traversal treats a principal's controlling domain as an inbound
+  predecessor, keeping DCSync-ers visible in exposure/derived-Tier0 now that
+  `DCSync` terminates at the domain node.
 
 ### Changed (control graph, Phase 4a — behind `TIE_BUILD_GRAPH`)
 - **`DCSync` edges scoped to the domain head.** Previously the templated

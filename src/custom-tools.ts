@@ -448,7 +448,14 @@ export const customTools: CustomTool[] = [
       const key = g.graph.findNodeKey(principal);
       if (!key) return { found: false, principal, reason: 'principal not found in graph' };
 
-      const res = reachable(g.graph, [key], 'forward', { maxDepth, maxNodes });
+      // expandControls:'all' — if the principal reaches domain compromise, its
+      // blast radius includes everything that domain Controls (bounded by
+      // maxNodes). §9.5.
+      const res = reachable(g.graph, [key], 'forward', {
+        maxDepth,
+        maxNodes,
+        expandControls: 'all',
+      });
       return {
         principal: g.graph.node(key)?.name ?? principal,
         reachableCount: res.reached.length,
@@ -583,7 +590,13 @@ export const customTools: CustomTool[] = [
         return { error: 'No resolvable targets', targets: explicit, tier0: useTier0 };
       }
 
-      const res = reachable(g.graph, [...keys], 'reverse', { maxDepth, maxNodes });
+      // expandControls:'all' (reverse) — whoever compromises a target's domain
+      // is also exposed to it, via the virtual Controls predecessor. §9.5.
+      const res = reachable(g.graph, [...keys], 'reverse', {
+        maxDepth,
+        maxNodes,
+        expandControls: 'all',
+      });
       return {
         targets: [...keys].map((k) => g.graph.node(k)?.name ?? k),
         exposedCount: res.reached.length,
@@ -639,7 +652,15 @@ export const customTools: CustomTool[] = [
 
       // Reverse-reachability from the seeds: each reached node is a de facto
       // Tier-0 member, and its inbound path is the escalation route.
-      const res = reachable(g.graph, [...seeds], 'reverse', { maxDepth, maxNodes });
+      // expandControls:'all' folds in domain-compromise: a privileged group is
+      // Controlled by its domain, so DCSync-ers (domain -> group) surface as
+      // Tier-0 even though DCSync now terminates at the domain node, not the
+      // group directly (Phase 4a scoping). §9.5.
+      const res = reachable(g.graph, [...seeds], 'reverse', {
+        maxDepth,
+        maxNodes,
+        expandControls: 'all',
+      });
 
       const builtin = [...seeds].map((k) => ({
         node: { key: k, name: g.graph.node(k)?.name ?? null, type: g.graph.node(k)?.type ?? null },

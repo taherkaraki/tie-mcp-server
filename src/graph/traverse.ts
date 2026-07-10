@@ -28,6 +28,18 @@ export const DEFAULT_MAX_NODES = 2000;
 export interface TraverseOptions {
   maxDepth?: number;
   maxNodes?: number;
+  /**
+   * Virtual `Controls` expansion when traversal reaches a domain node (§9.5):
+   *   'off'       — default; domain compromise does not expand further.
+   *   'toTargets' — synthesize a Controls hop only to keys in `controlsTargets`
+   *                 (O(1) per domain; used by targeted A→B path-finding).
+   *   'all'       — synthesize Controls to every in-domain principal (bounded by
+   *                 maxNodes; used by open-ended blast radius).
+   * Only meaningful for forward traversal.
+   */
+  expandControls?: 'off' | 'toTargets' | 'all';
+  /** Target node keys for expandControls: 'toTargets'. */
+  controlsTargets?: Set<string>;
 }
 
 /** One hop in a reconstructed path. */
@@ -89,8 +101,44 @@ export function reachable(
 ): TraverseResult {
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxNodes = opts.maxNodes ?? DEFAULT_MAX_NODES;
-  const neighbours = (key: string): readonly Edge[] =>
-    direction === 'forward' ? graph.edgesFrom(key) : graph.edgesTo(key);
+  const expandControls = opts.expandControls ?? 'off';
+
+  // Synthetic Controls edges (virtual — never stored), materialized as needed.
+  // Forward: from a domain node → the principals it controls.
+  // Reverse: from a principal → the domain head that controls it (its inbound
+  //   Controls predecessor), so exposure/who-can-reach queries account for
+  //   domain compromise. Both always encode the edge as domain --Controls-->
+  //   principal so the path reads consistently regardless of traversal dir.
+  const mkControls = (domainKey: string, principalKey: string): Edge => ({
+    from: domainKey,
+    to: principalKey,
+    kind: 'Controls',
+    via: 'domainControls',
+  });
+
+  const controlsNeighbours = (key: string): Edge[] => {
+    if (expandControls === 'off') return [];
+    if (direction === 'forward') {
+      if (!graph.isDomain(key)) return [];
+      if (expandControls === 'toTargets') {
+        const out: Edge[] = [];
+        for (const t of opts.controlsTargets ?? []) {
+          if (graph.domainControls(key, t)) out.push(mkControls(key, t));
+        }
+        return out;
+      }
+      return graph.principalsControlledBy(key).map((p) => mkControls(key, p)); // 'all'
+    }
+    // reverse: this principal's controlling domain is an inbound predecessor.
+    const dom = graph.controllingDomainOf(key);
+    return dom ? [mkControls(dom, key)] : [];
+  };
+
+  const neighbours = (key: string): readonly Edge[] => {
+    const real = direction === 'forward' ? graph.edgesFrom(key) : graph.edgesTo(key);
+    const virt = controlsNeighbours(key);
+    return virt.length ? [...real, ...virt] : real;
+  };
   // For reverse traversal, the "next" node is the edge's source, not target.
   const nextKey = (e: Edge): string => (direction === 'forward' ? e.to : e.from);
 
@@ -152,7 +200,15 @@ export function shortestPath(
   opts: TraverseOptions = {}
 ): { path: PathStep[]; depth: number } | { path: null; truncated: TraverseResult['truncated'] } {
   const target = toKey.toLowerCase();
-  const result = reachable(graph, [fromKey], 'forward', opts);
+  // Enable virtual Controls expansion toward the target, so a path that runs
+  // through domain compromise (…→ domain → target) completes instead of dead-
+  // ending at the domain (§9.5). O(1) per domain reached — only the target is
+  // ever synthesized. Caller opts can override.
+  const result = reachable(graph, [fromKey], 'forward', {
+    expandControls: 'toTargets',
+    controlsTargets: new Set([target]),
+    ...opts,
+  });
   const hit = result.reached.find((r) => r.node.key === target);
   if (hit) return { path: hit.path, depth: hit.depth };
   return { path: null, truncated: result.truncated };

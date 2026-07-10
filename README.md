@@ -132,8 +132,15 @@ decoded SDDL:
 - membership (`MemberOf`, including `primaryGroupID` which `member` omits),
 - `GenericAll` / `GenericWrite` / `WriteDacl` / `WriteOwner`, `AddMember`,
   `ForceChangePassword`, `AddKeyCredentialLink` (shadow creds),
-- `DCSync` (both replication rights), constrained delegation & RBCD,
-  `SIDHistory`, and GPO links.
+- `DCSync` (both replication rights, scoped to the domain head), constrained
+  delegation & RBCD, `SIDHistory`,
+- `Contains` (container → child) and `GpoAppliesTo` (GPO → linked OU), so
+  GPO-based control chains down to affected objects, and
+- `Controls` (domain → in-domain principal): the "domain compromise owns
+  everything in the domain" primitive, synthesized at query time so paths
+  continue *through* a domain takeover to a specific target. Example:
+  `unpriv → owns GPO → GpoAppliesTo OU → Contains user → DCSync → domain →
+  Controls → Administrator`.
 
 Three tools traverse it — all shortest-path (BFS), depth/breadth-capped, and
 cycle-safe:

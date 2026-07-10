@@ -374,10 +374,22 @@ honest answer is "everything" (summarized, not exploded).
 
 ### 9.6 Build order (Phase 4)
 
-1. **PR 4a** — scope `DCSync` to `domainDNS`; add `Contains` + `GpoAppliesTo`
-   edges with unit tests (self-contained, no fan-out).
-2. **PR 4b** — `Controls` as a virtual edge + target-aware traversal expansion
-   (the O(1) trick) + blast-radius summarization; extend the three tools.
+1. **PR 4a (DONE)** — scope `DCSync` to `domainDNS`; add `Contains` +
+   `GpoAppliesTo` edges with unit tests (self-contained, no fan-out).
+2. **PR 4b (DONE)** — `Controls` as a virtual edge (never stored) +
+   `TraverseOptions.expandControls` (`off` | `toTargets` | `all`).
+   `shortestPath` auto-uses `toTargets` so A→B completes *through* domain
+   compromise (O(1) — only the target is synthesized). `get_blast_radius` and
+   the reverse exposure/`get_tier0` tools use `all`, bounded by `maxNodes`.
+   Reverse traversal treats a principal's controlling domain as an inbound
+   predecessor, so exposure/derived-Tier0 still surface DCSync-ers now that
+   DCSync terminates at the domain node. Verified end-to-end: the full
+   `unpriv -GenericAll-> GPO -GpoAppliesTo-> OU -Contains-> user -DCSync-> domain
+   -Controls-> crownjewel` path reconstructs.
+
+   Note: `Contains` from the domain head already reaches its *direct* children;
+   `Controls` is what reaches principals nested under OUs (any depth) without a
+   full containment chain.
 
 Split so the concrete stored edges (4a) are reviewed separately from the
 virtual-expansion traversal change (4b), where the subtle correctness lives.

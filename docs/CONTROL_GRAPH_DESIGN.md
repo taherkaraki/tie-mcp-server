@@ -281,3 +281,104 @@ Small memory cost.
 Rationale for splitting: the parser's edge-semantics tests are where the real
 correctness risk lives and deserve their own review, uncoupled from traversal.
 
+## 9. Phase 4 — full attack paths (domain hub, containment, GPO scope)
+
+Status: **proposed**. PR 1–3 chain DACL rights + upward `MemberOf` + DCSync, which
+is enough for "who can reach Tier-0". It is NOT enough for a full
+`unprivileged user → crown-jewel member` narrative: several hops are missing, and
+DCSync currently fans out. Phase 4 closes this.
+
+### 9.1 The guiding invariant (agreed)
+
+**Every edge must be self-contained: its meaning is a property of `(from, to)`
+alone, readable without knowing how you arrived.** This is what makes a path
+composable. It is why we do NOT put a `SyncsCredentials`-style edge on
+`domain → object` (that relationship only exists *because* a DCSync preceded it —
+path-dependent, so wrong). Instead the meaning splits cleanly across two
+self-contained edges joined by the domain node:
+
+```
+user -DCSync-> alsid.corp -Controls-> nodeB
+```
+
+- `DCSync` (principal → domain): "can replicate/steal all secrets of this domain."
+  Self-contained; terminates at the domain because that is the object the
+  replication rights are an ACE on.
+- `Controls` (domain → in-domain object): "domain authority ⇒ full control of this
+  object." Self-contained; true regardless of how the domain was reached.
+
+### 9.2 Why the domain stays a first-class node (not collapsed)
+
+Collapsing to `user -DCSync-> nodeB` was considered and rejected:
+
+1. **Breaks the invariant** — `DCSync` on `user → nodeB` is meaningless in
+   isolation (DCSync is by definition "replicate *the domain*"); it only reads if
+   you remember the omitted domain step. Path-dependent = disallowed.
+2. **Re-creates the N×M fan-out** we scoped DCSync to avoid. The domain is an
+   articulation point: N compromise-primitives in, M controlled objects out. Keep
+   the node → **N + M** edges. Collapse it → **N × M**. Same combinatorial blow-up
+   we just eliminated.
+3. **It's a real object and a genuine convergence hub** — many primitives
+   (DCSync, WriteDacl-on-domain-object, owning the domain head, owning a DC) all
+   mean "domain compromise" and should meet at one node, preserving *why* the
+   takeover happened. A collapsed edge cannot say which primitive was used.
+
+Generalizes: keep any high-convergence node (groups, GPOs, OUs); never
+pre-collapse its transitive effects into N×M direct edges.
+
+### 9.3 New edges
+
+| EdgeKind        | from → to                              | Self-contained meaning |
+|-----------------|----------------------------------------|------------------------|
+| `Contains`      | container (OU/CN/domain) → child object | LDAP containment; parent's controllers control the child |
+| `GpoAppliesTo`  | GPO → object in a linked OU/domain scope | the GPO's settings apply to (can control) that object |
+| `Controls`      | domain → security principal in that domain | domain authority ⇒ full control (VIRTUAL — see 9.5) |
+
+- **`DCSync` is scoped to the domain node** (the small fix): emit the `DCSync`
+  edge only when the object carrying both replication rights is the domain head
+  (`objectclass` contains `domainDNS`). On any non-domain object, the underlying
+  `GenericAll`/rights edges we already emit still cover it — nothing is lost, but
+  we stop labeling ~24 templated child-object ACEs as "DCSync".
+- **`GpoAppliesTo`** is the attack-useful direction (GPO → affected objects),
+  derived from an OU's `gplink` + that OU's containment scope. Note this is the
+  inverse of the existing `GpLink` (OU → GPO) edge, which we keep for provenance.
+- **`Contains`** comes from `distinguishedName` parentage (the child DN is the
+  parent DN plus one RDN) — no extra API data needed.
+
+### 9.4 `Controls` boundary (semantic correctness)
+
+`Controls` targets are exactly the security principals whose **SID domain equals
+the domain node's SID** (users/computers/groups *in that domain*). A
+foreign-domain object that merely appeared in an ACE is NOT controlled by this
+domain; cross-domain reach is modeled only where a real trust path exists. This
+keeps `Controls` self-contained and prevents false cross-domain takeover claims.
+
+### 9.5 Traversal rules — target-aware expansion (kills the fan-out)
+
+`Controls` is **virtual: never materialized/stored.** It is expanded at query
+time, differently per lens, so the domain→everyone expansion never actually
+exists as edges:
+
+| Query | On reaching a domain node |
+|-------|---------------------------|
+| `get_control_paths(A → B)` (targeted) | Check only whether **B** is an in-domain principal; if so synthesize the single `domain -Controls-> B` hop and complete the path. **O(1)** — no enumeration. |
+| `get_blast_radius(A)` (open-ended) | Domain reached ⇒ owns everything. Return a **summarized** `domain -Controls-> (all N in-domain principals)` annotation, optionally enumerated up to `maxNodes` — never a silent N-edge dump. |
+| `get_asset_exposure(B)` (reverse) | Traverse `Controls` backward: whoever can compromise B's domain is exposed to B. Same in-domain rule. |
+
+Key consequence (resolves the "terminal vs through" debate): the domain is **not**
+a hard terminal. For a targeted A→B query, if B is reachable *through* domain
+compromise, the path MUST continue through the domain and show
+`domain -Controls-> B` — stopping at the domain would falsely report "no path".
+The domain only behaves "terminal-ish" for open-ended blast radius, where the
+honest answer is "everything" (summarized, not exploded).
+
+### 9.6 Build order (Phase 4)
+
+1. **PR 4a** — scope `DCSync` to `domainDNS`; add `Contains` + `GpoAppliesTo`
+   edges with unit tests (self-contained, no fan-out).
+2. **PR 4b** — `Controls` as a virtual edge + target-aware traversal expansion
+   (the O(1) trick) + blast-radius summarization; extend the three tools.
+
+Split so the concrete stored edges (4a) are reviewed separately from the
+virtual-expansion traversal change (4b), where the subtle correctness lives.
+

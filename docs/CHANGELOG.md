@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (control graph, Phase 4a — behind `TIE_BUILD_GRAPH`)
+- **`DCSync` edges scoped to the domain head.** Previously the templated
+  replication ACE matched on many child objects, fanning one real capability into
+  ~24 spurious `DCSync` edges per principal. Now `DCSync` is emitted only when the
+  object carrying both replication rights is the domain (`objectclass` contains
+  `domainDNS`). Non-domain objects keep their underlying `GenericAll`/rights
+  edges, so no real control is lost. This makes any path through DCSync legible
+  and blast-radius counts honest.
+
+### Added (control graph, Phase 4a)
+- **`Contains` edge** (container → child), derived from `distinguishedName`
+  parentage — no extra API data. Lets control of an OU/container compose down to
+  the objects it holds.
+- **`GpoAppliesTo` edge** (GPO → linked OU/domain), the attack-useful inverse of
+  the existing `GpLink`. Points at the linked container (not every object under
+  it); `Contains` then chains the effect downward at traversal time, avoiding a
+  GPO×objects fan-out.
+- Edge assembly now resolves an edge's **source** by DN/key (not just SID), fixing
+  latent mis-resolution of group-`member`-listed and container-sourced edges.
+
+See `docs/CONTROL_GRAPH_DESIGN.md` §9. Query tools for these (the `Controls`
+virtual edge + target-aware traversal) land in Phase 4b.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added

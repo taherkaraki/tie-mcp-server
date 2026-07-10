@@ -97,11 +97,11 @@ export class ControlGraph {
     let processed = 0;
     for (const obj of objects) {
       for (const raw of edgesForObject(obj)) {
-        const from = resolveRef(raw.from, 'sid', byDn, bySid) ?? raw.from.toLowerCase();
-        const to = resolveRef(raw.to, raw.targetRef, byDn, bySid);
-        if (!to) {
+        const from = resolveRef(raw.from, raw.fromRef ?? 'sid', byDn, bySid, g.nodes);
+        const to = resolveRef(raw.to, raw.targetRef, byDn, bySid, g.nodes);
+        if (!from || !to) {
           g.dangling++;
-          continue; // target out of scope; keep count, don't extend graph
+          continue; // source or target out of scope; count, don't extend graph
         }
         g.addEdge({ from, to, kind: raw.kind, via: raw.via, detail: raw.detail });
       }
@@ -198,14 +198,16 @@ function classify(obj: StoredADObject): string {
   return classes[classes.length - 1] ?? obj.type;
 }
 
-/** Resolve a raw edge reference (sid/dn/guid) to a known node key, or null. */
+/** Resolve a raw edge reference (key/sid/dn/guid) to a known node key, or null. */
 function resolveRef(
   ref: string,
-  kind: 'sid' | 'dn' | 'guid',
+  kind: 'sid' | 'dn' | 'guid' | 'key',
   byDn: Map<string, string>,
-  bySid: Map<string, string>
+  bySid: Map<string, string>,
+  nodes: Map<string, GraphNode>
 ): string | null {
   const lower = ref.toLowerCase();
+  if (kind === 'key') return nodes.has(lower) ? lower : null; // already a node key
   if (kind === 'dn') return byDn.get(lower) ?? null;
   if (kind === 'sid') return bySid.get(lower) ?? (lower.startsWith('s-1-') ? lower : null);
   return null; // guid refs resolved later if needed

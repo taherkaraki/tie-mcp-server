@@ -120,7 +120,9 @@ test('unresolvable (cross-domain / out-of-scope) targets count as dangling', () 
     '2:ext'
   );
   const g = ControlGraph.build([foreign], undefined, T);
-  assert.equal(g.stats().dangling, 1);
+  // Two unresolvable refs dangle: the memberof group, and the Contains parent
+  // (CN=ext's parent DC=other is not a resolvable object). No edges created.
+  assert.equal(g.stats().dangling, 2);
   assert.equal(g.stats().edges, 0);
 });
 
@@ -138,3 +140,47 @@ function forwardOf(g: ControlGraph, key: string): readonly Edge[] {
 function reverseOf(g: ControlGraph, key: string): readonly Edge[] {
   return g.edgesTo(key);
 }
+
+test('GPO -> OU -> child chain composes through GpoAppliesTo + Contains (Phase 4a)', () => {
+  // A GPO, an OU that links it, and a computer contained in that OU.
+  const gpo = obj(
+    {
+      cn: '{POLICY-GUID}',
+      distinguishedname: 'CN={POLICY-GUID},CN=Policies,CN=System,DC=x',
+      objectclass: ['top', 'groupPolicyContainer'],
+    },
+    '1:gpo'
+  );
+  const ou = obj(
+    {
+      cn: 'Workstations',
+      distinguishedname: 'OU=Workstations,DC=x',
+      objectclass: ['top', 'organizationalUnit'],
+      gplink: '[LDAP://CN={POLICY-GUID},CN=Policies,CN=System,DC=x;0]',
+    },
+    '1:ou'
+  );
+  const comp = obj(
+    {
+      objectsid: 'S-1-5-21-1-2-3-1500',
+      cn: 'WS01',
+      samaccountname: 'WS01$',
+      distinguishedname: 'CN=WS01,OU=Workstations,DC=x',
+      objectclass: ['top', 'computer'],
+    },
+    '1:ws01'
+  );
+  const g = ControlGraph.build([gpo, ou, comp], undefined, T);
+
+  // GPO --GpoAppliesTo--> OU
+  const gpoOut = g.edgesFrom('1:gpo');
+  const applies = gpoOut.find((e) => e.kind === 'GpoAppliesTo');
+  assert.ok(applies, 'GPO should point at the OU it applies to');
+  assert.equal(applies!.to, '1:ou');
+
+  // OU --Contains--> computer
+  const ouOut = g.edgesFrom('1:ou');
+  const contains = ouOut.find((e) => e.kind === 'Contains');
+  assert.ok(contains, 'OU should contain the computer');
+  assert.equal(contains!.to, 's-1-5-21-1-2-3-1500');
+});

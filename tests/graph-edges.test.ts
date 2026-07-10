@@ -13,6 +13,7 @@ import {
   sddlEdges,
   edgesForObject,
   nodeKeyFor,
+  parentDn,
 } from '../src/graph/edges.js';
 import type { StoredADObject } from '../src/ad-object-store.js';
 
@@ -116,16 +117,29 @@ test('WriteProperty with no object-type => GenericWrite', () => {
   assert.deepEqual(kinds(e), ['GenericWrite']);
 });
 
-test('DCSync requires BOTH replication rights for the same trustee', () => {
+test('DCSync requires BOTH replication rights AND the domain head (Phase 4a)', () => {
   const bothRights =
     'D:(OA;;CR;1131f6aa-9c07-11d1-f79f-00c04fc2dcd2;;S-1-5-21-1-2-3-1105)' +
     '(OA;;CR;1131f6ad-9c07-11d1-f79f-00c04fc2dcd2;;S-1-5-21-1-2-3-1105)';
-  const e = sddlEdges(obj({ objectsid: 'S-1-5-21-1-2-3', ntsecuritydescriptor: bothRights }));
-  assert.ok(e.some((x) => x.kind === 'DCSync'));
+  // On the domain head, both rights => DCSync.
+  const onDomain = sddlEdges(
+    obj({ objectsid: 'S-1-5-21-1-2-3', objectclass: ['top', 'domainDNS'], ntsecuritydescriptor: bothRights })
+  );
+  assert.ok(onDomain.some((x) => x.kind === 'DCSync'));
 
+  // Same ACEs on a NON-domain object => no DCSync (scoping fix); the templated
+  // replication ACE no longer fans out onto child objects.
+  const offDomain = sddlEdges(
+    obj({ objectsid: 'S-1-5-21-1-2-3-1500', objectclass: ['top', 'group'], ntsecuritydescriptor: bothRights })
+  );
+  assert.ok(!offDomain.some((x) => x.kind === 'DCSync'));
+
+  // One right on the domain head => still no DCSync.
   const oneRight =
     'D:(OA;;CR;1131f6aa-9c07-11d1-f79f-00c04fc2dcd2;;S-1-5-21-1-2-3-1105)';
-  const e2 = sddlEdges(obj({ objectsid: 'S-1-5-21-1-2-3', ntsecuritydescriptor: oneRight }));
+  const e2 = sddlEdges(
+    obj({ objectsid: 'S-1-5-21-1-2-3', objectclass: ['top', 'domainDNS'], ntsecuritydescriptor: oneRight })
+  );
   assert.ok(!e2.some((x) => x.kind === 'DCSync'));
 });
 
@@ -155,4 +169,41 @@ test('edgesForObject merges attribute and SDDL edges', () => {
   assert.ok(e.some((x) => x.kind === 'MemberOf'));
   assert.ok(e.some((x) => x.kind === 'Owns'));
   assert.ok(e.some((x) => x.kind === 'GenericAll'));
+});
+
+test('parentDn strips the first RDN, respecting escaped commas', () => {
+  assert.equal(parentDn('CN=bob,OU=Users,DC=alsid,DC=corp'), 'OU=Users,DC=alsid,DC=corp');
+  assert.equal(parentDn('OU=Users,DC=alsid,DC=corp'), 'DC=alsid,DC=corp');
+  // Escaped comma inside the RDN value must not be treated as a separator.
+  assert.equal(parentDn('CN=Doe\\, John,OU=Users,DC=x'), 'OU=Users,DC=x');
+  // A single RDN has no parent.
+  assert.equal(parentDn('DC=corp'), null);
+});
+
+test('Contains edge: parent container -> child (via containment)', () => {
+  const e = attributeEdges(obj({
+    objectsid: 'S-1-5-21-1-2-3-1105',
+    distinguishedname: 'CN=bob,OU=Users,DC=alsid,DC=corp',
+  }));
+  const c = e.find((x) => x.kind === 'Contains');
+  assert.ok(c);
+  assert.equal(c!.from, 'OU=Users,DC=alsid,DC=corp'); // parent DN
+  assert.equal(c!.fromRef, 'dn');
+  assert.equal(c!.targetRef, 'key'); // child is this object's node key
+});
+
+test('GpLink and GpoAppliesTo are emitted as inverse edges per link', () => {
+  const e = attributeEdges(obj({
+    objectsid: undefined,
+    cn: 'Sales OU',
+    distinguishedname: 'OU=Sales,DC=x',
+    gplink: '[LDAP://cn={31B2F340-016D-11D2-945F-00C04FB984F9},cn=policies,cn=system,DC=x;0]',
+  }, '1:sales-ou'));
+  const gplink = e.find((x) => x.kind === 'GpLink');
+  const applies = e.find((x) => x.kind === 'GpoAppliesTo');
+  assert.ok(gplink, 'OU -> GPO provenance edge');
+  assert.ok(applies, 'GPO -> OU attack-direction edge');
+  // GpoAppliesTo points FROM the GPO (dn) TO this OU (node key).
+  assert.equal(applies!.fromRef, 'dn');
+  assert.equal(applies!.targetRef, 'key');
 });

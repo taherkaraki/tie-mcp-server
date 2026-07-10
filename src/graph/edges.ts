@@ -41,7 +41,9 @@ export type EdgeKind =
   | 'AllowedToDelegate' // constrained delegation (msDS-AllowedToDelegateTo)
   | 'AllowedToAct' // RBCD (msDS-AllowedToActOnBehalfOfOtherIdentity)
   | 'SIDHistory' // from carries to's SID in sidHistory (silent equivalence)
-  | 'GpLink'; // OU/domain to links a GPO
+  | 'GpLink' // OU/domain to links a GPO (provenance; inverse of GpoAppliesTo)
+  | 'Contains' // container (OU/CN/domain) to directly contains child object
+  | 'GpoAppliesTo'; // GPO to an object in a linked OU/domain scope
 
 /**
  * How the target reference in a raw edge should be resolved to a node key
@@ -50,17 +52,19 @@ export type EdgeKind =
  *   'dn'   — target is a distinguishedName; look up the owning object
  *   'guid' — target is a raw GUID string
  */
-export type TargetRef = 'sid' | 'dn' | 'guid';
+export type TargetRef = 'sid' | 'dn' | 'guid' | 'key';
 
 export interface RawEdge {
-  /** Source node key (usually the trustee SID or the object's own key). */
+  /** Source reference (interpreted per `fromRef`, default 'sid'). */
   from: string;
+  /** How to resolve `from` to a node key. Defaults to 'sid' when omitted. */
+  fromRef?: TargetRef;
   /** Target reference (interpreted per `targetRef`). */
   to: string;
   targetRef: TargetRef;
   kind: EdgeKind;
   /** Where the edge came from, for provenance in query output. */
-  via: 'member' | 'primaryGroup' | 'delegation' | 'rbcd' | 'sidHistory' | 'gplink' | 'dacl' | 'owner';
+  via: 'member' | 'primaryGroup' | 'delegation' | 'rbcd' | 'sidHistory' | 'gplink' | 'dacl' | 'owner' | 'containment' | 'gpoScope';
   /** Optional detail (e.g. the ACE right tokens or a resolved right name). */
   detail?: string;
 }
@@ -114,12 +118,12 @@ export function attributeEdges(obj: StoredADObject): RawEdge[] {
   // group side) is handled from the group's own record via the same closure, so
   // we key on memberof here to capture the member's outbound edge.
   for (const groupDn of arr(rec, 'memberof')) {
-    edges.push({ from: self, to: groupDn, targetRef: 'dn', kind: 'MemberOf', via: 'member' });
+    edges.push({ from: self, fromRef: 'key', to: groupDn, targetRef: 'dn', kind: 'MemberOf', via: 'member' });
   }
   // Some directories populate `member` but not `memberof`; capture that too by
   // emitting, for each listed member DN, an edge member->thisGroup.
   for (const memberDn of arr(rec, 'member')) {
-    edges.push({ from: memberDn, to: self, targetRef: 'dn', kind: 'MemberOf', via: 'member', detail: 'from-group-member' });
+    edges.push({ from: memberDn, fromRef: 'dn', to: self, targetRef: 'key', kind: 'MemberOf', via: 'member', detail: 'from-group-member' });
   }
 
   // primaryGroupID: membership the `member`/`memberof` attrs omit. The group's
@@ -128,7 +132,7 @@ export function attributeEdges(obj: StoredADObject): RawEdge[] {
   if (typeof pgid === 'number' && selfSid) {
     const dom = domainOf(selfSid);
     if (dom) {
-      edges.push({ from: self, to: `${dom}-${pgid}`.toLowerCase(), targetRef: 'sid', kind: 'MemberOf', via: 'primaryGroup' });
+      edges.push({ from: self, fromRef: 'key', to: `${dom}-${pgid}`.toLowerCase(), targetRef: 'sid', kind: 'MemberOf', via: 'primaryGroup' });
     }
   }
 
@@ -136,28 +140,67 @@ export function attributeEdges(obj: StoredADObject): RawEdge[] {
   // hosts. We record it as an edge to each target (SPN host resolution happens
   // in assembly; store the raw SPN as detail).
   for (const spn of arr(rec, 'msds-allowedtodelegateto')) {
-    edges.push({ from: self, to: spn, targetRef: 'dn', kind: 'AllowedToDelegate', via: 'delegation', detail: spn });
+    edges.push({ from: self, fromRef: 'key', to: spn, targetRef: 'dn', kind: 'AllowedToDelegate', via: 'delegation', detail: spn });
   }
 
   // RBCD: whoever is listed in msDS-AllowedToActOnBehalfOfOtherIdentity can act
   // as THIS object. That attribute is itself a security descriptor; assembly
   // parses it. Here we flag the object as an RBCD target so assembly expands it.
   if (str(rec, 'msds-allowedtoactonbehalfofotheridentity')) {
-    edges.push({ from: self, to: self, targetRef: 'sid', kind: 'AllowedToAct', via: 'rbcd', detail: 'see-descriptor' });
+    edges.push({ from: self, fromRef: 'key', to: self, targetRef: 'key', kind: 'AllowedToAct', via: 'rbcd', detail: 'see-descriptor' });
   }
 
   // SID history: this principal is silently equivalent to each SID it carries.
   for (const histSid of arr(rec, 'sidhistory')) {
-    edges.push({ from: self, to: histSid.toLowerCase(), targetRef: 'sid', kind: 'SIDHistory', via: 'sidHistory' });
+    edges.push({ from: self, fromRef: 'key', to: histSid.toLowerCase(), targetRef: 'sid', kind: 'SIDHistory', via: 'sidHistory' });
   }
 
-  // GPO links: an OU/domain links GPOs; controlling the GPO controls linked
-  // computers. gplink is array/object in the store; each entry has a DN/GUID.
+  // GPO links: an OU/domain links GPOs. Two edges per link:
+  //   - GpLink (OU -> GPO): provenance / "this container links that policy".
+  //   - GpoAppliesTo (GPO -> this OU): the attack-useful direction. We point it
+  //     at the OU itself, NOT at every object under it — Contains (below) then
+  //     chains the effect down to contained objects during traversal. This keeps
+  //     one edge per link instead of GPO x (every object in scope). (§9.3)
   for (const link of gplinkTargets(rec['gplink'])) {
-    edges.push({ from: self, to: link, targetRef: 'dn', kind: 'GpLink', via: 'gplink' });
+    edges.push({ from: self, fromRef: 'key', to: link, targetRef: 'dn', kind: 'GpLink', via: 'gplink' });
+    edges.push({ from: link, fromRef: 'dn', to: self, targetRef: 'key', kind: 'GpoAppliesTo', via: 'gpoScope' });
+  }
+
+  // Containment: this object's parent container controls it. Derived from DN
+  // parentage (child DN = parent DN + one RDN), so no extra API data. Composes
+  // with GpoAppliesTo (GPO -> OU -> ...contained objects) at query time.
+  const dn = str(rec, 'distinguishedname');
+  const parent = dn ? parentDn(dn) : null;
+  if (parent) {
+    edges.push({ from: parent, fromRef: 'dn', to: self, targetRef: 'key', kind: 'Contains', via: 'containment' });
   }
 
   return edges;
+}
+
+/**
+ * Return the parent container DN of a distinguishedName, or null if it has no
+ * parent within the directory (root / naming-context head). Strips the first
+ * RDN, respecting backslash-escaped commas inside an RDN value.
+ */
+export function parentDn(dn: string): string | null {
+  let i = 0;
+  while (i < dn.length) {
+    if (dn[i] === '\\') {
+      i += 2; // skip escaped char (e.g. \,)
+      continue;
+    }
+    if (dn[i] === ',') break;
+    i++;
+  }
+  if (i >= dn.length) return null; // single RDN, no parent
+  const parent = dn.slice(i + 1).trim();
+  // A parent consisting only of DC= components is a naming-context head; its
+  // "parent" (e.g. DC=corp under DC=alsid,DC=corp) is not a real object, so a
+  // Contains edge to it would dangle. Emitting it is harmless (assembly drops
+  // unresolved targets), but we still return it — the domain head object itself
+  // resolves and anchors the tree.
+  return parent || null;
 }
 
 /** Extract GPO DNs from the gplink attribute (array/object or raw string). */
@@ -166,9 +209,9 @@ function gplinkTargets(v: unknown): string[] {
   const items = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
   for (const it of items) {
     if (typeof it === 'string') {
-      // Could be a JSON object string or a raw "[LDAP://cn={guid},...]" list.
-      const dn = extractGpoDn(it);
-      if (dn) out.push(dn);
+      // A raw gplink is one or more "[LDAP://<gpo-dn>;<flags>]" fragments; a
+      // single value can link several GPOs. Extract every GPO DN.
+      out.push(...extractGpoDns(it));
     } else if (it && typeof it === 'object') {
       const dn = (it as Record<string, unknown>)['DistinguishedName'];
       if (typeof dn === 'string') out.push(dn);
@@ -177,10 +220,20 @@ function gplinkTargets(v: unknown): string[] {
   return out;
 }
 
-/** Pull a GPO DN out of a gplink fragment, if present. */
-function extractGpoDn(s: string): string | null {
-  const m = s.match(/(cn=\{[0-9a-fA-F-]+\}[^;\]]*)/);
-  return m ? m[1] : null;
+/**
+ * Pull all GPO DNs out of a raw gplink string. Matches `CN={...},...` runs
+ * case-insensitively (gplink casing varies), up to the fragment terminator
+ * (`;` before the link flags, or the closing `]`).
+ */
+function extractGpoDns(s: string): string[] {
+  const out: string[] = [];
+  const re = /(cn=\{[^}]+\}[^;\]]*)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    // Strip a leading "LDAP://" if the capture began right after it.
+    out.push(m[1].replace(/^ldap:\/\//i, '').trim());
+  }
+  return out;
 }
 
 /**
@@ -205,7 +258,7 @@ export function sddlEdges(obj: StoredADObject): RawEdge[] {
 
   // Owner implicitly can rewrite the DACL -> effectively full control.
   if (sd.owner && sd.owner !== SELF_SID) {
-    edges.push({ from: sd.owner.toLowerCase(), to: self, targetRef: 'sid', kind: 'Owns', via: 'owner' });
+    edges.push({ from: sd.owner.toLowerCase(), to: self, targetRef: 'key', kind: 'Owns', via: 'owner' });
   }
 
   // Track replication rights per trustee for the DCSync (both-required) check.
@@ -218,7 +271,7 @@ export function sddlEdges(obj: StoredADObject): RawEdge[] {
     if (trustee === SELF_SID.toLowerCase()) continue;
 
     const push = (kind: EdgeKind, detail?: string) =>
-      edges.push({ from: trustee, to: self, targetRef: 'sid', kind, via: 'dacl', detail });
+      edges.push({ from: trustee, to: self, targetRef: 'key', kind, via: 'dacl', detail });
 
     // Full control / GenericAll.
     if (isFullControl(ace.rights)) {
@@ -243,10 +296,17 @@ export function sddlEdges(obj: StoredADObject): RawEdge[] {
     }
   }
 
-  // DCSync: a trustee holding BOTH replication rights on this (domain) object.
-  for (const trustee of replGetChanges) {
-    if (replGetChangesAll.has(trustee)) {
-      edges.push({ from: trustee, to: self, targetRef: 'sid', kind: 'DCSync', via: 'dacl' });
+  // DCSync: a trustee holding BOTH replication rights, but ONLY on the domain
+  // head (objectclass contains domainDNS). The replication ACE is templated onto
+  // many child objects' descriptors; emitting DCSync on each would fan one real
+  // capability into ~24 spurious edges. On non-domain objects the underlying
+  // GenericAll/rights edges above still capture any real control, so nothing is
+  // lost — we just don't mislabel it "DCSync". (Phase 4a, see CONTROL_GRAPH_DESIGN §9.3)
+  if (arr(obj.record, 'objectclass').includes('domainDNS')) {
+    for (const trustee of replGetChanges) {
+      if (replGetChangesAll.has(trustee)) {
+        edges.push({ from: trustee, to: self, targetRef: 'key', kind: 'DCSync', via: 'dacl' });
+      }
     }
   }
 

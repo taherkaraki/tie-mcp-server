@@ -125,11 +125,12 @@ async function main() {
     `Registered ${activeCustomTools.length} custom + ${activeTools.length} of ${tools.length} generated tools`
   );
 
-  // Optional: warm the AD-object snapshot in the background so the first search
-  // is fast. Fire-and-forget — failures are logged but must not crash the
-  // server, and the scan runs after connect() so it never delays startup.
+  // Warm the AD-object snapshot in the background so the first search is fast
+  // (on by default; TIE_WARM_CACHE=false opts out). Fire-and-forget — failures
+  // are logged but must not crash the server, and the scan runs after connect()
+  // so it never delays startup.
   if (config.warmCache) {
-    console.error('Warming AD object cache (TIE_WARM_CACHE=true)...');
+    console.error('Warming AD object cache (set TIE_WARM_CACHE=false to disable)...');
     getSharedStore(tieClient)
       .warm(({ pages, objects }) => {
         if (pages % 10 === 0) {

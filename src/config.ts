@@ -11,9 +11,11 @@ export interface TIEConfig {
   /**
    * When true, eagerly scan and build the AD-object snapshot at startup so the
    * first `query_ad_objects`/`get_ad_object` call is fast instead of paying the
-   * full-directory scan. Off by default: the scan is expensive and pointless for
-   * sessions that never search AD objects (and doubles across multi-environment
-   * setups). Enable with TIE_WARM_CACHE=true.
+   * full-directory scan (~100s on a large tenant). On by default: warming runs
+   * in the background after connect(), so it never delays startup, and a query
+   * arriving mid-scan simply joins the in-flight build. Set TIE_WARM_CACHE=false
+   * to disable (e.g. to avoid the startup scan on a tenant you never search, or
+   * to reduce load when running many server instances).
    */
   warmCache: boolean;
   /**
@@ -47,7 +49,8 @@ export function loadConfig(): TIEConfig {
     apiKey,
     timeout: process.env.TIE_TIMEOUT ? parseInt(process.env.TIE_TIMEOUT, 10) : 30000,
     maxRetries: process.env.TIE_MAX_RETRIES ? parseInt(process.env.TIE_MAX_RETRIES, 10) : 3,
-    warmCache: process.env.TIE_WARM_CACHE === 'true',
+    // On by default; only an explicit "false" disables warming.
+    warmCache: process.env.TIE_WARM_CACHE !== 'false',
     cacheTtlMs: process.env.TIE_CACHE_TTL_MS
       ? parseInt(process.env.TIE_CACHE_TTL_MS, 10)
       : undefined,

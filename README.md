@@ -80,22 +80,23 @@ a working session, so cheap reuse is the right default. Consequences to know:
   and see the *old* data because you didn't refresh.
 - When the TTL lapses, the next query transparently rescans (no action needed).
 
-> **First-query warm-up:** the first search after startup (or after the TTL
-> lapses) triggers the full directory scan and can take several seconds to tens of
-> seconds on a large tenant; subsequent queries are milliseconds. Two things
-> soften this:
+> **Startup warming (on by default):** the full directory scan can take tens of
+> seconds to ~100s on a large tenant. To keep that off the critical path, the
+> server warms the snapshot **in the background at startup** — after `connect()`,
+> so it never delays startup, and a query arriving mid-scan simply joins the
+> in-flight build (no double scan). By the time you run your first search the
+> cache is usually already warm. Two further points:
 >
 > - **Progress notifications.** If the MCP client attaches a `progressToken` to
->   the call, the server emits `notifications/progress` once per fetched page
->   (e.g. "Scanning AD objects: 12000 loaded (12 pages)"), so a long first scan
->   isn't silent. Clients that don't request progress simply see one longer tool
->   call.
-> - **Optional startup warming.** Set `TIE_WARM_CACHE=true` to have the server
->   build the snapshot in the background at startup, so the first user query is
->   already fast. It's off by default — the scan is wasted work for sessions that
->   never search AD objects, and it doubles across multi-environment setups (each
->   server process scans its own tenant). Enable it for search-heavy,
->   single-environment deployments.
+>   a call that does trigger a scan, the server emits `notifications/progress`
+>   once per fetched page (e.g. "Scanning AD objects: 12000 loaded (12 pages)"),
+>   so a long scan isn't silent. Clients that don't request progress simply see
+>   one longer tool call.
+> - **Disabling warming.** Set `TIE_WARM_CACHE=false` to skip the startup scan —
+>   useful on a tenant you never search, or to reduce load when running many
+>   server instances. The snapshot then builds lazily on the first query instead.
+>   A failed background warm (e.g. TIE unreachable at startup) is caught and logged,
+>   and also falls back to lazy build — it never crashes the server.
 
 ## Installation
 
@@ -168,8 +169,9 @@ Optional environment variables:
 
 - `TIE_ALLOWED_SAFETY` - Comma-separated safety tiers to advertise (`read`,
   `read,write`); see [Server-side safety filter](#server-side-safety-filter).
-- `TIE_WARM_CACHE` - `true` to build the AD-object search snapshot at startup
-  instead of on first query (see [AD object search](#ad-object-search)).
+- `TIE_WARM_CACHE` - Build the AD-object search snapshot at startup instead of on
+  first query. On by default; set to `false` to disable (see
+  [AD object search](#ad-object-search)).
 - `TIE_CACHE_TTL_MS` - How long the AD-object snapshot stays fresh, in ms
   (default `86400000`, i.e. 1 day). Lower it to trade scan cost for freshness.
 - `TIE_TIMEOUT` - Per-request timeout in ms (default `30000`).

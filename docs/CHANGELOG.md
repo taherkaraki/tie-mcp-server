@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-10
+
+### Changed
+- **AD-object cache warming is now on by default.** The startup scan runs in the
+  background after `connect()`, so it never delays startup, and a query arriving
+  mid-scan joins the in-flight build (no double scan) — there is no latency cost,
+  only a faster first query. Set `TIE_WARM_CACHE=false` to opt out (e.g. a tenant
+  you never search, or to reduce load across many instances); the snapshot then
+  builds lazily on first use, and a failed background warm falls back to lazy
+  build rather than crashing.
+
 ## [0.3.0] - 2026-07-09
 
 ### Added

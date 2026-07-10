@@ -268,10 +268,13 @@ Small memory cost.
    NOTE: transitive membership closure is done at *query time* by BFS following
    `MemberOf` edges (PR 3), not materialized at build — precomputing it would be
    redundant with traversal.
-3. **PR 3 (next) — `traverse.ts` + tools** `get_blast_radius`,
-   `get_control_paths`, `get_asset_exposure` with `maxDepth`/`maxNodes` +
-   truncation reporting, and the `graphState` "not ready yet" contract on the
-   tools.
+3. **PR 3 (DONE) — `traverse.ts` + tools** `get_blast_radius`,
+   `get_control_paths`, `get_asset_exposure`. BFS over the bidirectional graph
+   (shortest paths), `maxDepth`/`maxNodes` guardrails with honest `truncated`
+   reporting, cycle-safe. Graph queries build the graph on demand (first call
+   pays the cost) and return a `notReady` status if a build is still in flight.
+   Exposure supports explicit targets or a built-in Tier-0 preset (privileged
+   RIDs 512/518/519/520 + BUILTIN Administrators)."
 
 Rationale for splitting: the parser's edge-semantics tests are where the real
 correctness risk lives and deserve their own review, uncoupled from traversal.

@@ -1,0 +1,159 @@
+/**
+ * Traversal over the control graph — the engine behind the three query lenses:
+ *   - blast radius (forward reachability from a principal)
+ *   - control paths (shortest path[s] between two nodes)
+ *   - asset exposure (reverse reachability into a target/Tier-0 set)
+ *
+ * All three are BFS over the same bidirectional graph; they differ only in
+ * direction (edgesFrom vs edgesTo) and start set. BFS gives shortest paths in an
+ * unweighted graph, which is what defenders want ("closest attacker first").
+ *
+ * Guardrails (a security tool must never silently under-report):
+ *   - maxDepth caps hops (default DEFAULT_MAX_DEPTH). Depth is shallow in AD;
+ *     breadth is the real cost, so maxNodes caps total visited nodes.
+ *   - When a cap stops expansion with frontier remaining, the result flags
+ *     `truncated` with the reason, so "no more paths" is never faked.
+ *
+ * Facts, not verdicts: results report reachability and the edge chain that makes
+ * it. Severity is the caller's / Tenable IOE's judgment.
+ */
+
+import type { ControlGraph, Edge, GraphNode } from './graph.js';
+
+/** Default hop cap — comfortably covers real AD control paths. */
+export const DEFAULT_MAX_DEPTH = 6;
+/** Default cap on total nodes visited, guarding against fan-out explosion. */
+export const DEFAULT_MAX_NODES = 2000;
+
+export interface TraverseOptions {
+  maxDepth?: number;
+  maxNodes?: number;
+}
+
+/** One hop in a reconstructed path. */
+export interface PathStep {
+  from: NodeRef;
+  to: NodeRef;
+  kind: Edge['kind'];
+  via: Edge['via'];
+  detail?: string;
+}
+
+/** A node as reported in results: key plus resolved identity, when known. */
+export interface NodeRef {
+  key: string;
+  name: string | null;
+  type: string | null;
+}
+
+export interface ReachEntry {
+  node: NodeRef;
+  /** Hop distance from the start (1 = directly adjacent). */
+  depth: number;
+  /** Shortest edge chain from the start to this node. */
+  path: PathStep[];
+}
+
+export interface TraverseResult {
+  start: NodeRef[];
+  direction: 'forward' | 'reverse';
+  reached: ReachEntry[];
+  truncated: null | 'depth' | 'nodes';
+  visited: number;
+}
+
+function nodeRef(g: ControlGraph, key: string): NodeRef {
+  const n: GraphNode | undefined = g.node(key);
+  return { key, name: n?.name ?? null, type: n?.type ?? null };
+}
+
+function stepFrom(g: ControlGraph, e: Edge): PathStep {
+  return {
+    from: nodeRef(g, e.from),
+    to: nodeRef(g, e.to),
+    kind: e.kind,
+    via: e.via,
+    detail: e.detail,
+  };
+}
+
+/**
+ * BFS reachability from a set of start keys in one direction. Returns every
+ * reachable node with its shortest path. Shared by all three query lenses.
+ */
+export function reachable(
+  graph: ControlGraph,
+  starts: string[],
+  direction: 'forward' | 'reverse',
+  opts: TraverseOptions = {}
+): TraverseResult {
+  const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
+  const maxNodes = opts.maxNodes ?? DEFAULT_MAX_NODES;
+  const neighbours = (key: string): readonly Edge[] =>
+    direction === 'forward' ? graph.edgesFrom(key) : graph.edgesTo(key);
+  // For reverse traversal, the "next" node is the edge's source, not target.
+  const nextKey = (e: Edge): string => (direction === 'forward' ? e.to : e.from);
+
+  const startKeys = starts.map((s) => s.toLowerCase());
+  const reached = new Map<string, ReachEntry>();
+  const seen = new Set<string>(startKeys);
+  let truncated: TraverseResult['truncated'] = null;
+
+  // Frontier holds (key, path-so-far). Start nodes have depth 0 and empty path.
+  let frontier: Array<{ key: string; path: PathStep[] }> = startKeys.map((key) => ({
+    key,
+    path: [],
+  }));
+
+  for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+    const next: Array<{ key: string; path: PathStep[] }> = [];
+    for (const { key, path } of frontier) {
+      for (const edge of neighbours(key)) {
+        const nk = nextKey(edge);
+        if (seen.has(nk)) continue; // BFS: first visit is the shortest path
+        seen.add(nk);
+
+        if (reached.size >= maxNodes) {
+          truncated = 'nodes';
+          break;
+        }
+
+        const step = stepFrom(graph, edge);
+        const newPath = [...path, step];
+        reached.set(nk, { node: nodeRef(graph, nk), depth, path: newPath });
+        next.push({ key: nk, path: newPath });
+      }
+      if (truncated === 'nodes') break;
+    }
+    if (truncated === 'nodes') break;
+    // If we exit the loop because depth hit the cap but frontier still had more
+    // to expand, flag depth truncation.
+    frontier = next;
+    if (depth === maxDepth && frontier.length > 0) truncated = 'depth';
+  }
+
+  return {
+    start: startKeys.map((k) => nodeRef(graph, k)),
+    direction,
+    reached: [...reached.values()].sort((a, b) => a.depth - b.depth),
+    truncated,
+    visited: seen.size,
+  };
+}
+
+/**
+ * Shortest path(s) from `fromKey` to `toKey` (forward). Returns the single
+ * shortest path (BFS) or null if unreachable within the caps.
+ */
+export function shortestPath(
+  graph: ControlGraph,
+  fromKey: string,
+  toKey: string,
+  opts: TraverseOptions = {}
+): { path: PathStep[]; depth: number } | { path: null; truncated: TraverseResult['truncated'] } {
+  const target = toKey.toLowerCase();
+  const result = reachable(graph, [fromKey], 'forward', opts);
+  const hit = result.reached.find((r) => r.node.key === target);
+  if (hit) return { path: hit.path, depth: hit.depth };
+  return { path: null, truncated: result.truncated };
+}

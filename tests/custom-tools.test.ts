@@ -110,6 +110,8 @@ function makeADObjectClient() {
           value: '"CN=Domain Admins,CN=Users,DC=alsid,DC=corp"',
           valueType: 'string',
         },
+        // RID -512 makes this a Tier-0 seed for asset-exposure tests.
+        { name: 'objectsid', value: '"S-1-5-21-9-9-9-512"', valueType: 'string' },
         { name: 'admincount', value: '1', valueType: 'integer' },
       ],
     },
@@ -134,11 +136,40 @@ function makeADObjectClient() {
           valueType: 'string',
         },
         { name: 'objectsid', value: '"S-1-5-21-9-9-9-1500"', valueType: 'string' },
+        // WidgetGroup is a member of Domain Admins -> control edge to Tier-0.
+        {
+          name: 'memberof',
+          value: '["CN=Domain Admins,CN=Users,DC=alsid,DC=corp"]',
+          valueType: 'array/string',
+        },
         {
           name: 'ntsecuritydescriptor',
           value:
             '"O:S-1-5-21-9-9-9-512G:S-1-5-21-9-9-9-512D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;S-1-1-0)"',
           valueType: 'string',
+        },
+      ],
+    },
+    {
+      id: 4,
+      objectId: '1:guid-4',
+      type: 'LDAP',
+      directoryId: 1,
+      objectAttributes: [
+        { name: 'cn', value: '"bob"', valueType: 'string' },
+        { name: 'samaccountname', value: '"bob"', valueType: 'string' },
+        {
+          name: 'distinguishedname',
+          value: '"CN=bob,OU=Users,DC=alsid,DC=corp"',
+          valueType: 'string',
+        },
+        { name: 'objectsid', value: '"S-1-5-21-9-9-9-2000"', valueType: 'string' },
+        { name: 'objectclass', value: '["top","person","user"]', valueType: 'array/string' },
+        // bob is a member of WidgetGroup -> two hops from Domain Admins.
+        {
+          name: 'memberof',
+          value: '["CN=Widget Group,OU=Groups,DC=alsid,DC=corp"]',
+          valueType: 'array/string',
         },
       ],
     },
@@ -234,4 +265,63 @@ test('get_ad_object decodes the security descriptor on request', async () => {
   assert.equal(ace.trustee.name, 'Everyone');
   assert.equal(ace.trustee.broad, true);
   assert.deepEqual(ace.rights, ['GenericAll']);
+});
+
+test('get_blast_radius reaches Domain Admins from bob through the group chain', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_blast_radius').handler(client, {
+    principal: 'bob',
+  })) as {
+    reachableCount: number;
+    reachable: Array<{ node: { key: string; name: string | null }; depth: number }>;
+  };
+
+  const names = result.reachable.map((r) => r.node.name);
+  assert.ok(names.includes('WidgetGroup'), 'reaches WidgetGroup');
+  assert.ok(names.includes('Domain Admins'), 'reaches Domain Admins transitively');
+});
+
+test('get_control_paths returns the edge chain bob -> Domain Admins', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_control_paths').handler(client, {
+    from: 'bob',
+    to: 'Domain Admins',
+  })) as {
+    reachable: boolean;
+    hops?: number;
+    path?: Array<{ kind: string }>;
+  };
+
+  assert.equal(result.reachable, true);
+  assert.equal(result.hops, 2); // bob -> WidgetGroup -> Domain Admins
+  assert.deepEqual(result.path?.map((s) => s.kind), ['MemberOf', 'MemberOf']);
+});
+
+test('get_control_paths reports unreachable when no path exists', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_control_paths').handler(client, {
+    from: 'Domain Admins',
+    to: 'bob',
+  })) as { reachable: boolean };
+  assert.equal(result.reachable, false);
+});
+
+test('get_asset_exposure (Tier-0 preset) lists principals that can reach Domain Admins', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_asset_exposure').handler(client, {})) as {
+    exposedCount: number;
+    exposedPrincipals: Array<{ node: { name: string | null } }>;
+  };
+
+  const names = result.exposedPrincipals.map((p) => p.node.name);
+  assert.ok(names.includes('bob'), 'bob is exposed to Tier-0');
+  assert.ok(names.includes('WidgetGroup'), 'WidgetGroup is exposed to Tier-0');
+});
+
+test('graph tools resolve a principal that does not exist to a not-found result', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_blast_radius').handler(client, {
+    principal: 'nonexistent-user',
+  })) as { found: boolean };
+  assert.equal(result.found, false);
 });

@@ -5,8 +5,9 @@ Model Context Protocol (MCP) server for Tenable Identity Exposure API.
 ## Features
 
 - Complete coverage of all 131 TIE API operations (one MCP tool per endpoint)
-- Additional convenience tools for discovery, navigation, and in-memory AD
-  object search (4 custom tools)
+- Additional convenience tools for discovery, navigation, in-memory AD object
+  search, permission decoding, and control-graph attack-path analysis (7 custom
+  tools)
 - Client-side credential management for security
 - Multi-tenant support (multiple TIE environments)
 - Granular tool-level security controls
@@ -42,6 +43,12 @@ turns the API into something an LLM can use effectively:
   `WriteDacl`, `ForceChangePassword`…), and **object-types resolved via the live
   schema** — turning "who can control this object?" into a readable answer
   instead of a 15 KB blob. See [Permission decoding](#permission-decoding).
+- **Cross-object attack-path analysis.** Because the whole directory is resident,
+  the server can build a *control graph* and answer questions no per-object API
+  can: blast radius ("what can this account reach?"), shortest control paths
+  ("how does X become Domain Admin?"), and asset exposure ("who can reach my
+  Tier-0?"). Edges come from group membership, ACL rights, delegation, SID
+  history and more. See [Attack-path analysis](#attack-path-analysis-control-graph).
 - **Composed discovery tools.** `get_topology` and `get_preferred_profile`
   answer "what forests/domains exist?" and "which profile should I use?" in one
   call each, instead of the model having to stitch together `/infrastructures`,
@@ -109,9 +116,56 @@ What the decoder does that a raw string can't:
   malformed descriptor.
 
 This is deliberately **facts, not verdicts** — it reports *who has which right*,
-and leaves severity to you or to Tenable's Indicators of Exposure. It is the
-foundation for planned cross-object analysis (attack paths, blast radius, asset
-exposure); see [docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
+and leaves severity to you or to Tenable's Indicators of Exposure. It is also the
+foundation for the control-graph analysis below; see
+[docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
+
+### Attack-path analysis (control graph)
+
+A single per-object question ("is this misconfigured?") is what Indicators of
+Exposure answer. The harder, cross-object question — "by chaining permissions and
+group memberships, **what can this account ultimately reach**, and **who can reach
+my crown jewels**?" — is a graph problem. From the resident snapshot the server
+builds a directed *control graph* whose edges come from both plain attributes and
+decoded SDDL:
+
+- membership (`MemberOf`, including `primaryGroupID` which `member` omits),
+- `GenericAll` / `GenericWrite` / `WriteDacl` / `WriteOwner`, `AddMember`,
+  `ForceChangePassword`, `AddKeyCredentialLink` (shadow creds),
+- `DCSync` (both replication rights), constrained delegation & RBCD,
+  `SIDHistory`, and GPO links.
+
+Three tools traverse it — all shortest-path (BFS), depth/breadth-capped, and
+cycle-safe:
+
+```typescript
+// Forward: if this account is compromised, what can it reach?
+get_blast_radius({ principal: "bob", maxDepth: 6 })
+
+// Targeted: how can X reach Y? Returns the edge chain.
+get_control_paths({ from: "bob", to: "Domain Admins" })
+// -> bob -MemberOf-> Helpdesk -GenericAll-> dcadmin -MemberOf-> Domain Admins
+
+// Reverse: who can reach this asset / the Tier-0 set?
+get_asset_exposure({})                       // Tier-0 preset (privileged groups)
+get_asset_exposure({ targets: ["CN=FileServer01,..."] })
+```
+
+Notes and honest limits:
+
+- **Directory-control edges only.** This is the credential-less slice — it does
+  *not* include logon sessions or local-admin (those need live host collectors,
+  à la BloodHound). A path here is a directory-control path, so a 0-path result
+  means "no control path", not "no attack path of any kind".
+- **Facts, not verdicts.** Results report reachability and the exact edge chain,
+  never a severity score.
+- **Guardrails.** `maxDepth` (default 6) and `maxNodes` bound traversal, and a
+  hit cap is reported as `truncated: "depth" | "nodes"` — never silently, since
+  under-reporting in a security tool is dangerous.
+- **On-demand build.** The graph is built from the in-memory snapshot with no
+  extra API calls. Set `TIE_BUILD_GRAPH=true` to build it in the background at
+  startup; otherwise the first graph query builds it (and may take tens of
+  seconds on a large tenant). See [docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
 
 ### Freshness and caching
 
@@ -401,9 +455,11 @@ safety, inputSchema, handler}`) and are dispatched alongside generated tools.
 
 ## Available Tools
 
-The server exposes **135 tools total**:
+The server exposes **138 tools total**:
 - **131 generated tools** from `src/generated/tools.ts` (one per TIE API endpoint)
-- **4 custom tools** from `src/custom-tools.ts` (convenience/discovery helpers)
+- **7 custom tools** from `src/custom-tools.ts` (`get_topology`,
+  `get_preferred_profile`, `query_ad_objects`, `get_ad_object`,
+  `get_blast_radius`, `get_control_paths`, `get_asset_exposure`)
 
 See [TOOL_NAMING_CONVENTION.md](docs/TOOL_NAMING_CONVENTION.md) for the naming scheme and
 the (historical) 88-endpoint reference list.

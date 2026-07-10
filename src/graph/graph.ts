@@ -56,6 +56,10 @@ export class ControlGraph {
   private nodes = new Map<string, GraphNode>();
   private forward = new Map<string, Edge[]>();
   private reverse = new Map<string, Edge[]>();
+  /** distinguishedName (lower) -> node key, for lookup by DN. */
+  private byDn = new Map<string, string>();
+  /** samAccountName (lower) -> node key, for lookup by SAM name. */
+  private bySam = new Map<string, string>();
   private dangling = 0;
   private builtMs = 0;
 
@@ -69,22 +73,24 @@ export class ControlGraph {
     const start = now();
 
     // Pass 1: nodes, plus DN and SID -> node-key indexes for target resolution.
-    const byDn = new Map<string, string>();
+    const byDn = g.byDn;
     const bySid = new Map<string, string>();
     for (const obj of objects) {
       const key = nodeKeyFor(obj);
       const sid = strField(obj, 'objectsid');
       const dn = strField(obj, 'distinguishedname');
+      const sam = strField(obj, 'samaccountname');
       g.nodes.set(key, {
         key,
         sid: sid?.toLowerCase() ?? null,
-        name: strField(obj, 'samaccountname') ?? strField(obj, 'cn'),
+        name: sam ?? strField(obj, 'cn'),
         dn,
         type: classify(obj),
         directoryId: obj.directoryId,
       });
       if (dn) byDn.set(dn.toLowerCase(), key);
       if (sid) bySid.set(sid.toLowerCase(), key);
+      if (sam) g.bySam.set(sam.toLowerCase(), key);
     }
 
     // Pass 2: derive + resolve edges.
@@ -129,6 +135,41 @@ export class ControlGraph {
   /** Inbound edges to a node (empty if none). Used by reverse traversal. */
   edgesTo(key: string): readonly Edge[] {
     return this.reverse.get(key.toLowerCase()) ?? [];
+  }
+
+  /**
+   * Resolve an identifier (node key, SID, distinguishedName, or samAccountName)
+   * to a node key, or null if no node matches. Case-insensitive.
+   */
+  findNodeKey(identifier: string): string | null {
+    const id = identifier.trim().toLowerCase();
+    if (this.nodes.has(id)) return id; // already a node key (SID or GUID)
+    if (this.byDn.has(id)) return this.byDn.get(id)!;
+    if (this.bySam.has(id)) return this.bySam.get(id)!;
+    return null;
+  }
+
+  /** All node keys (for target-set derivation / iteration). */
+  allNodeKeys(): IterableIterator<string> {
+    return this.nodes.keys();
+  }
+
+  /**
+   * The Tier-0 target set: nodes whose SID is a well-known privileged group
+   * (Domain Admins -512, Enterprise Admins -519, Administrators -544, Schema
+   * Admins -518) or the domain root. This is the "domain-admins" preset; the
+   * "tier0-derived" preset (reverse-reachability closure) is computed by the
+   * exposure tool on top of these seeds.
+   */
+  tier0Seeds(): string[] {
+    const seeds: string[] = [];
+    const privRids = new Set(['512', '519', '518', '520']);
+    for (const [key, node] of this.nodes) {
+      if (!node.sid) continue;
+      const rid = node.sid.slice(node.sid.lastIndexOf('-') + 1);
+      if (node.sid === 's-1-5-32-544' || privRids.has(rid)) seeds.push(key);
+    }
+    return seeds;
   }
 
   stats(): GraphStats {

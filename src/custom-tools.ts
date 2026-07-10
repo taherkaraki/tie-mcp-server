@@ -25,6 +25,8 @@ import {
 } from './ad-object-store.js';
 import { QuerySyntaxError } from './query/lexer.js';
 import { decodeSecurityDescriptor } from './graph/decode.js';
+import { reachable, shortestPath, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './graph/traverse.js';
+import type { ControlGraph } from './graph/graph.js';
 
 /**
  * Optional per-call context the server passes to a custom tool handler. Carries
@@ -89,6 +91,40 @@ function presentObject(obj: StoredADObject) {
     directoryId: obj.directoryId,
     attributes: obj.raw.objectAttributes,
   };
+}
+
+/**
+ * Ensure the control graph is ready, building it on demand. Graph queries build
+ * the graph if it isn't present (a first graph query pays the build cost, then
+ * subsequent ones are fast) — unlike the startup warm, which is opt-in. Returns
+ * the ready graph, or a `notReady` status object for the tool to return as-is.
+ */
+async function ensureGraph(
+  store: ADObjectStore,
+  onProgress?: ScanProgress
+): Promise<
+  | { graph: ControlGraph }
+  | { notReady: { error: string; graphState: string; hint: string } }
+> {
+  // buildGraph() loads the snapshot first, then builds edges; it dedups
+  // concurrent builds and is a no-op once ready.
+  await store.buildGraph(
+    onProgress
+      ? ({ processed, total }) => onProgress({ pages: processed, objects: total })
+      : undefined
+  );
+  const graph = store.getGraph();
+  if (!graph) {
+    const status = store.graphStatus();
+    return {
+      notReady: {
+        error: 'Control graph is not ready',
+        graphState: status.state,
+        hint: 'The graph is still building; retry shortly.',
+      },
+    };
+  }
+  return { graph };
 }
 
 /** Minimal shapes of the API responses we consume (see the OpenAPI spec). */
@@ -364,6 +400,197 @@ export const customTools: CustomTool[] = [
       }
 
       return result;
+    },
+  },
+  {
+    name: 'get_blast_radius',
+    description:
+      'Control-graph analysis: from a principal, list every object it can reach ' +
+      'by chaining control relationships (group membership, GenericAll/WriteDacl/' +
+      'WriteOwner, AddMember, ForceChangePassword, DCSync, delegation, SID ' +
+      'history, GPO links). Answers "if this account is compromised, what is the ' +
+      'blast radius?". Each result carries the shortest edge chain that reaches ' +
+      'it. Facts only — reachability and the edges, not a severity score. NOTE: ' +
+      'directory-control edges only (no logon sessions / local-admin). Requires ' +
+      'the control graph; the first such call builds it (can take tens of ' +
+      'seconds on a large tenant).',
+    category: 'Graph',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        principal: {
+          type: 'string',
+          description: 'Start principal: SID, distinguishedName, or samAccountName.',
+        },
+        maxDepth: {
+          type: 'integer',
+          description: `Max control hops to follow (default ${DEFAULT_MAX_DEPTH}).`,
+          minimum: 1,
+        },
+        maxNodes: {
+          type: 'integer',
+          description: `Cap on nodes returned (default ${DEFAULT_MAX_NODES}).`,
+          minimum: 1,
+        },
+      },
+      required: ['principal'],
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      const principal = args.principal as string;
+      const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : undefined;
+      const maxNodes = typeof args.maxNodes === 'number' ? args.maxNodes : undefined;
+      const store = getStore(client);
+      const g = await ensureGraph(store, ctx?.reportProgress);
+      if ('notReady' in g) return g.notReady;
+
+      const key = g.graph.findNodeKey(principal);
+      if (!key) return { found: false, principal, reason: 'principal not found in graph' };
+
+      const res = reachable(g.graph, [key], 'forward', { maxDepth, maxNodes });
+      return {
+        principal: g.graph.node(key)?.name ?? principal,
+        reachableCount: res.reached.length,
+        truncated: res.truncated,
+        graph: store.graphStatus().stats,
+        reachable: res.reached,
+      };
+    },
+  },
+  {
+    name: 'get_control_paths',
+    description:
+      'Control-graph analysis: find the shortest control path from one principal ' +
+      'to another — "how can X reach/compromise Y?". Returns the edge chain ' +
+      '(e.g. bob -MemberOf-> Helpdesk -GenericAll-> dcadmin -MemberOf-> Domain ' +
+      'Admins) or reports no path within the depth cap. Facts only. Requires the ' +
+      'control graph; the first graph call builds it.',
+    category: 'Graph',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: {
+          type: 'string',
+          description: 'Source principal: SID, distinguishedName, or samAccountName.',
+        },
+        to: {
+          type: 'string',
+          description: 'Target principal/object: SID, distinguishedName, or samAccountName.',
+        },
+        maxDepth: {
+          type: 'integer',
+          description: `Max control hops (default ${DEFAULT_MAX_DEPTH}).`,
+          minimum: 1,
+        },
+      },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      const from = args.from as string;
+      const to = args.to as string;
+      const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : undefined;
+      const store = getStore(client);
+      const g = await ensureGraph(store, ctx?.reportProgress);
+      if ('notReady' in g) return g.notReady;
+
+      const fromKey = g.graph.findNodeKey(from);
+      const toKey = g.graph.findNodeKey(to);
+      if (!fromKey) return { found: false, reason: `from principal not found: ${from}` };
+      if (!toKey) return { found: false, reason: `to principal not found: ${to}` };
+
+      const result = shortestPath(g.graph, fromKey, toKey, { maxDepth });
+      if (result.path === null) {
+        return {
+          from: g.graph.node(fromKey)?.name ?? from,
+          to: g.graph.node(toKey)?.name ?? to,
+          reachable: false,
+          truncated: result.truncated,
+          note:
+            result.truncated === 'depth'
+              ? 'No path within maxDepth; a longer path may exist.'
+              : 'No control path found.',
+        };
+      }
+      return {
+        from: g.graph.node(fromKey)?.name ?? from,
+        to: g.graph.node(toKey)?.name ?? to,
+        reachable: true,
+        hops: result.depth,
+        path: result.path,
+      };
+    },
+  },
+  {
+    name: 'get_asset_exposure',
+    description:
+      'Control-graph analysis (reverse): given a protected asset or the Tier-0 ' +
+      'set, list every principal that can ultimately reach it by chaining control ' +
+      'edges — "who is exposed to / can take over this asset?". Provide explicit ' +
+      'targets, or use the built-in Tier-0 preset (Domain Admins, Enterprise ' +
+      'Admins, Administrators, Schema Admins). Each attacker carries its shortest ' +
+      'inbound path, closest first. Facts only. Requires the control graph.',
+    category: 'Graph',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        targets: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Explicit target principals (SID/DN/samAccountName). Omit to use the ' +
+            'Tier-0 preset.',
+        },
+        tier0: {
+          type: 'boolean',
+          description:
+            'Use the built-in Tier-0 target set (privileged groups). Default true ' +
+            'when no explicit targets are given.',
+        },
+        maxDepth: {
+          type: 'integer',
+          description: `Max inbound control hops (default ${DEFAULT_MAX_DEPTH}).`,
+          minimum: 1,
+        },
+        maxNodes: {
+          type: 'integer',
+          description: `Cap on principals returned (default ${DEFAULT_MAX_NODES}).`,
+          minimum: 1,
+        },
+      },
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      const explicit = Array.isArray(args.targets) ? (args.targets as string[]) : [];
+      const useTier0 = args.tier0 === true || explicit.length === 0;
+      const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : undefined;
+      const maxNodes = typeof args.maxNodes === 'number' ? args.maxNodes : undefined;
+      const store = getStore(client);
+      const g = await ensureGraph(store, ctx?.reportProgress);
+      if ('notReady' in g) return g.notReady;
+
+      const keys = new Set<string>();
+      for (const t of explicit) {
+        const k = g.graph.findNodeKey(t);
+        if (k) keys.add(k);
+      }
+      if (useTier0) for (const k of g.graph.tier0Seeds()) keys.add(k);
+
+      if (keys.size === 0) {
+        return { error: 'No resolvable targets', targets: explicit, tier0: useTier0 };
+      }
+
+      const res = reachable(g.graph, [...keys], 'reverse', { maxDepth, maxNodes });
+      return {
+        targets: [...keys].map((k) => g.graph.node(k)?.name ?? k),
+        exposedCount: res.reached.length,
+        truncated: res.truncated,
+        graph: store.graphStatus().stats,
+        exposedPrincipals: res.reached,
+      };
     },
   },
 ];

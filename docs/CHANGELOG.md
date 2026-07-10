@@ -34,8 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index (so reverse/exposure traversal is as cheap as forward), and counts
   out-of-scope/cross-domain references as `dangling` rather than dropping them.
   Built in the background *after* the attribute snapshot warms (never gates
-  search), bound to the snapshot generation and invalidated on rebuild. Query
-  tools (blast radius / paths / exposure) land in Phase 3.
+  search), bound to the snapshot generation and invalidated on rebuild.
+- **Control-graph query tools** (Phase 3): three new tools over the graph —
+  `get_blast_radius` (forward: what a principal can reach), `get_control_paths`
+  (shortest control path between two principals, as a named edge chain), and
+  `get_asset_exposure` (reverse: who can reach an asset or the Tier-0 set).
+  BFS shortest paths, `maxDepth`/`maxNodes` guardrails with honest `truncated`
+  reporting, cycle-safe. The first graph query builds the graph on demand (so
+  the tools work even without `TIE_BUILD_GRAPH`); a build still in flight
+  returns a `notReady` status rather than a misleading empty result. Total tool
+  count is now **138** (131 generated + 7 custom). Facts only — reachability and
+  edges, no severity scoring.
 
 ### Internal
 - `docs/CONTROL_GRAPH_DESIGN.md` — design for the planned control graph (attack

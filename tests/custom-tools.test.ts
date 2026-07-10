@@ -93,3 +93,99 @@ test('custom tool input schemas set additionalProperties: false (v0.2.1 fix)', (
     );
   }
 });
+
+/** Fake client that serves a single ad-objects page then an empty one. */
+function makeADObjectClient() {
+  const page = [
+    {
+      id: 1,
+      objectId: '1:guid-1',
+      type: 'LDAP',
+      directoryId: 1,
+      objectAttributes: [
+        { name: 'cn', value: '"Domain Admins"', valueType: 'string' },
+        { name: 'samaccountname', value: '"Domain Admins"', valueType: 'string' },
+        {
+          name: 'distinguishedname',
+          value: '"CN=Domain Admins,CN=Users,DC=alsid,DC=corp"',
+          valueType: 'string',
+        },
+        { name: 'admincount', value: '1', valueType: 'integer' },
+      ],
+    },
+    {
+      id: 2,
+      objectId: '1:guid-2',
+      type: 'LDAP',
+      directoryId: 1,
+      objectAttributes: [{ name: 'admincount', value: '0', valueType: 'integer' }],
+    },
+  ];
+  const fake = {
+    get(path: string) {
+      const m = path.match(/lastIdentifierSeen=(\d+)/);
+      const lastId = m ? Number(m[1]) : 0;
+      return Promise.resolve({
+        _embedded: { 'ad-objects': page.filter((o) => o.id > lastId) },
+      });
+    },
+  };
+  return fake as unknown as TIEClient;
+}
+
+test('query_ad_objects returns matches with total and truncation flags', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('query_ad_objects').handler(client, {
+    expression: 'admincount>0',
+    limit: 50,
+  })) as { total: number; returned: number; truncated: boolean; objects: unknown[] };
+
+  assert.equal(result.total, 1);
+  assert.equal(result.returned, 1);
+  assert.equal(result.truncated, false);
+  assert.equal(result.objects.length, 1);
+});
+
+test('query_ad_objects reports a syntax error instead of throwing', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('query_ad_objects').handler(client, {
+    expression: 'admincount >', // missing operand
+  })) as { error?: string; position?: number };
+
+  assert.equal(result.error, 'Invalid query expression');
+  assert.equal(typeof result.position, 'number');
+});
+
+test('query_ad_objects forwards scan progress via ctx.reportProgress', async () => {
+  const client = makeADObjectClient();
+  const events: Array<{ pages: number; objects: number }> = [];
+  // refresh:true forces a scan even if a prior test already warmed the shared
+  // store, so progress is guaranteed to fire.
+  await tool('query_ad_objects').handler(
+    client,
+    { expression: 'type=LDAP', refresh: true },
+    { reportProgress: (info) => events.push(info) }
+  );
+  assert.ok(events.length >= 1, 'progress should be reported at least once');
+  assert.equal(typeof events[0].objects, 'number');
+});
+
+test('get_ad_object looks up by distinguished name', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_ad_object').handler(client, {
+    distinguishedName: 'CN=Domain Admins,CN=Users,DC=alsid,DC=corp',
+  })) as { found: boolean; object?: { id: number } };
+
+  assert.equal(result.found, true);
+  assert.equal(result.object?.id, 1);
+});
+
+test('get_ad_object requires exactly one identifier', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_ad_object').handler(client, {
+    distinguishedName: 'CN=x',
+    sid: 'S-1-5-21-1',
+  })) as { error?: string };
+
+  assert.match(result.error ?? '', /exactly one/);
+});

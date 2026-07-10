@@ -1,0 +1,237 @@
+/**
+ * In-memory store of every AD object, built from one full paginated scan of
+ * GET /api/ad-objects and queried with the expression language in ./query.
+ *
+ * Why this exists: the TIE API has no server-side filter on ad-objects — the
+ * only way to find objects by attribute is to page through the entire directory
+ * (tens of thousands of objects). Doing that on every lookup is wasteful, so we
+ * scan once, normalize each object's attributes into a typed map, and keep the
+ * result in memory behind a TTL. Subsequent queries run in-process for free
+ * until the snapshot expires.
+ *
+ * Each stored record keeps:
+ *   - the object's identity (id, objectId, type LDAP|SYSVOL, directoryId) as
+ *     queryable fields, so `type=LDAP` and `directoryid=1` work; and
+ *   - every attribute decoded via normalizeAttributeValue, keyed by lower-cased
+ *     name so lookups are case-insensitive.
+ *
+ * The original object (raw attributes) is retained alongside the flattened form
+ * so tools can return full fidelity while queries run against the flat map.
+ */
+
+import type { TIEClient } from './client.js';
+import { normalizeAttributeValue, type NormalizedValue } from './query/value.js';
+import { parseQuery } from './query/parser.js';
+import { evaluate, type QueryRecord } from './query/evaluate.js';
+
+/** The raw ad-object shape returned by the API. */
+interface RawADObject {
+  id: number;
+  objectId: string;
+  type: string;
+  directoryId: number;
+  objectAttributes: Array<{ name: string; value: string; valueType: string }>;
+}
+
+/** A stored object: identity + flattened queryable map + the raw original. */
+export interface StoredADObject {
+  id: number;
+  objectId: string;
+  type: string;
+  directoryId: number;
+  /** Lower-cased attribute name -> decoded value; includes identity fields. */
+  record: QueryRecord;
+  /** The untouched API object, for full-fidelity responses. */
+  raw: RawADObject;
+}
+
+/** Page size TIE returns; also our "last page" heuristic. */
+const PAGE_SIZE = 1000;
+
+/** Safety cap so a broken cursor can't loop forever. */
+const MAX_PAGES = 200;
+
+export interface StoreOptions {
+  /** How long a built snapshot stays valid, in ms. Default 10 minutes. */
+  ttlMs?: number;
+}
+
+/**
+ * Progress reporter invoked once per fetched page during a scan. `pages` and
+ * `objects` are cumulative; there is no known total ahead of time (the API
+ * doesn't report a count), so consumers should treat this as indeterminate
+ * progress. Kept transport-agnostic so the store has no MCP dependency.
+ */
+export type ScanProgress = (info: { pages: number; objects: number }) => void;
+
+export class ADObjectStore {
+  private objects: StoredADObject[] = [];
+  private builtAt = 0;
+  private building: Promise<void> | null = null;
+  private readonly ttlMs: number;
+
+  constructor(
+    private readonly client: TIEClient,
+    options: StoreOptions = {}
+  ) {
+    this.ttlMs = options.ttlMs ?? 10 * 60 * 1000;
+  }
+
+  /** True when we have a snapshot that hasn't expired (ttlMs of 0 is never fresh). */
+  private isFresh(now: number): boolean {
+    return this.objects.length > 0 && now - this.builtAt < this.ttlMs;
+  }
+
+  /**
+   * Ensure a fresh snapshot exists, building one if needed. Concurrent callers
+   * share a single in-flight build rather than each launching their own scan.
+   *
+   * `onProgress` is attached only to a build this call actually starts; a caller
+   * that joins an in-flight build won't receive its page events (the build was
+   * already reporting to whoever launched it). This keeps the semantics simple
+   * and avoids multiplexing one scan's progress to many request tokens.
+   */
+  async ensureLoaded(
+    force = false,
+    onProgress?: ScanProgress,
+    now: number = Date.now()
+  ): Promise<void> {
+    if (!force && this.isFresh(now)) return;
+    if (this.building) return this.building;
+
+    this.building = this.build(onProgress)
+      .then(() => {
+        this.builtAt = Date.now();
+      })
+      .finally(() => {
+        this.building = null;
+      });
+    return this.building;
+  }
+
+  /**
+   * Eagerly build the snapshot (used for optional startup warming). Safe to call
+   * alongside user queries: it shares the same in-flight build dedup.
+   */
+  async warm(onProgress?: ScanProgress): Promise<void> {
+    return this.ensureLoaded(false, onProgress);
+  }
+
+  /** Page through every ad-object and normalize it into the store. */
+  private async build(onProgress?: ScanProgress): Promise<void> {
+    const collected: StoredADObject[] = [];
+    let lastId = 0;
+    let pages = 0;
+
+    while (pages < MAX_PAGES) {
+      pages++;
+      const resp = await this.client.get<{
+        _embedded?: {
+          'ad-objects'?: RawADObject[];
+          'ad-object'?: RawADObject[];
+        };
+      }>(`/api/ad-objects?lastIdentifierSeen=${lastId}`);
+
+      // Runtime uses the plural key; the OpenAPI schema names it singular.
+      const batch =
+        resp._embedded?.['ad-objects'] ?? resp._embedded?.['ad-object'] ?? [];
+      if (batch.length === 0) break;
+
+      for (const raw of batch) collected.push(this.toStored(raw));
+      onProgress?.({ pages, objects: collected.length });
+
+      const newLast = batch[batch.length - 1].id;
+      if (newLast === lastId) break; // cursor not advancing; avoid infinite loop
+      lastId = newLast;
+
+      if (batch.length < PAGE_SIZE) break; // last (partial) page
+    }
+
+    this.objects = collected;
+  }
+
+  /** Flatten one raw object into identity fields + decoded attribute map. */
+  private toStored(raw: RawADObject): StoredADObject {
+    const record: QueryRecord = {
+      // Identity fields, queryable like any attribute.
+      id: raw.id,
+      objectid: raw.objectId,
+      type: raw.type,
+      directoryid: raw.directoryId,
+    };
+
+    for (const attr of raw.objectAttributes) {
+      const key = attr.name.toLowerCase();
+      const value: NormalizedValue = normalizeAttributeValue(
+        attr.value,
+        attr.valueType
+      );
+      // If TIE ever repeats a name, keep the first; names are unique in practice.
+      if (!(key in record)) record[key] = value;
+    }
+
+    return {
+      id: raw.id,
+      objectId: raw.objectId,
+      type: raw.type,
+      directoryId: raw.directoryId,
+      record,
+      raw,
+    };
+  }
+
+  /**
+   * Run an expression against the loaded snapshot and return matching objects.
+   * Loads/refreshes the snapshot first. `limit` caps the number returned
+   * (0 = no cap); the total match count is reported separately.
+   */
+  async query(
+    expression: string,
+    opts: { limit?: number; force?: boolean; onProgress?: ScanProgress } = {}
+  ): Promise<{ total: number; returned: StoredADObject[] }> {
+    // Parse first so a bad expression fails fast, before any (slow) scan.
+    const ast = parseQuery(expression);
+    await this.ensureLoaded(opts.force ?? false, opts.onProgress);
+
+    const matches: StoredADObject[] = [];
+    for (const obj of this.objects) {
+      if (evaluate(ast, obj.record)) matches.push(obj);
+    }
+
+    const limit = opts.limit ?? 0;
+    const returned = limit > 0 ? matches.slice(0, limit) : matches;
+    return { total: matches.length, returned };
+  }
+
+  /**
+   * Fast single-object lookup by a common identifier. Loads the snapshot first,
+   * then scans the in-memory records. Case-insensitive.
+   */
+  async lookup(
+    by: 'dn' | 'sid' | 'sam',
+    value: string,
+    opts: { force?: boolean; onProgress?: ScanProgress } = {}
+  ): Promise<StoredADObject | null> {
+    await this.ensureLoaded(opts.force ?? false, opts.onProgress);
+    const field =
+      by === 'dn' ? 'distinguishedname' : by === 'sid' ? 'objectsid' : 'samaccountname';
+    const target = value.trim().toLowerCase();
+
+    for (const obj of this.objects) {
+      const v = obj.record[field];
+      if (typeof v === 'string' && v.toLowerCase() === target) return obj;
+    }
+    return null;
+  }
+
+  /** Snapshot metadata for diagnostics / tool responses. */
+  stats(): { count: number; builtAt: number; ageMs: number; fresh: boolean } {
+    const now = Date.now();
+    return {
+      count: this.objects.length,
+      builtAt: this.builtAt,
+      ageMs: this.builtAt ? now - this.builtAt : -1,
+      fresh: this.isFresh(now),
+    };
+  }
+}

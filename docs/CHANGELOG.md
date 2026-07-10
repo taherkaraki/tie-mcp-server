@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-09
+
+### Added
+- **In-memory AD object query engine** — two new custom tools that make
+  attribute-based object lookup practical despite the TIE API having no
+  server-side filter on `/api/ad-objects`:
+  - `query_ad_objects` — search every AD object with a filter expression
+    (`FIELD OP VALUE` combined with `AND`/`OR`/`NOT` and parentheses).
+    Operators: `= != > >= < <=` (numeric when both sides are numbers, else
+    case-insensitive string), `:` for contains/substring and array membership,
+    and `&`/`|` for numeric bitwise tests. Example:
+    `(admincount>0 AND useraccountcontrol:"NORMAL") OR badpwdcount>=5`.
+  - `get_ad_object` — look up a single object by `distinguishedName`, `sid`, or
+    `samAccountName`.
+- **Cached object store** (`src/ad-object-store.ts`) — one full paginated scan
+  builds an in-memory snapshot (TTL-cached, default 10 min) that every query and
+  lookup reuses, so the directory is not re-paged on each request. Attributes are
+  decoded per `valueType` into typed values; identity fields (`type`,
+  `directoryId`, `objectId`, `id`) are queryable alongside attributes.
+- **Scan progress notifications** — when the MCP client attaches a
+  `progressToken`, `query_ad_objects`/`get_ad_object` emit
+  `notifications/progress` once per fetched page during the initial scan, so a
+  long first search isn't silent.
+- **Optional startup cache warming** — set `TIE_WARM_CACHE=true` to build the
+  snapshot in the background at startup so the first query is fast. Off by
+  default (the scan is wasted for sessions that never search AD objects and
+  doubles across multi-environment setups).
+
+### Changed
+- `query_ad_objects` now parses the expression *before* scanning, so an invalid
+  expression fails immediately instead of after a full directory scan.
+
+### Internal
+- New `src/query/` module: `value.ts` (attribute normalization), `lexer.ts`,
+  `parser.ts` (recursive descent, precedence `NOT > AND > OR`), `evaluate.ts`.
+- Added test suites for value normalization, parsing, evaluation, and the store
+  (paging, TTL, cache reuse, lookups). Total tool count is now **135**
+  (131 generated + 4 custom).
+
 ## [0.2.2] - 2026-07-07
 
 ### Changed

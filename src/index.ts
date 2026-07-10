@@ -22,7 +22,12 @@ import { TIEClient } from './client.js';
 import { dispatchTool } from './dispatch.js';
 import { filterTools } from './filter.js';
 import { tools, type ToolDescriptor } from './generated/tools.js';
-import { customTools, type CustomTool } from './custom-tools.js';
+import {
+  customTools,
+  getSharedStore,
+  type CustomTool,
+  type ToolContext,
+} from './custom-tools.js';
 
 async function main() {
   const config = loadConfig();
@@ -56,7 +61,7 @@ async function main() {
 
   // Route each call: custom tools use their own handler; everything else goes
   // through the generic descriptor dispatcher.
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
     const custom = customByName.get(name);
     const descriptor = toolsByName.get(name);
@@ -68,9 +73,27 @@ async function main() {
       };
     }
 
+    // If the client requested progress for this request, bridge the store's
+    // per-page scan callback to notifications/progress. `total` is omitted
+    // because the API doesn't tell us the object count up front (indeterminate).
+    const progressToken = request.params._meta?.progressToken;
+    const ctx: ToolContext = {};
+    if (progressToken !== undefined) {
+      ctx.reportProgress = ({ pages, objects }) => {
+        void extra.sendNotification({
+          method: 'notifications/progress',
+          params: {
+            progressToken,
+            progress: pages,
+            message: `Scanning AD objects: ${objects} loaded (${pages} pages)`,
+          },
+        });
+      };
+    }
+
     try {
       const data = custom
-        ? await custom.handler(tieClient, args ?? {})
+        ? await custom.handler(tieClient, args ?? {}, ctx)
         : await dispatchTool(tieClient, descriptor!, args ?? {});
       return {
         content: [
@@ -97,6 +120,27 @@ async function main() {
   console.error(
     `Registered ${activeCustomTools.length} custom + ${activeTools.length} of ${tools.length} generated tools`
   );
+
+  // Optional: warm the AD-object snapshot in the background so the first search
+  // is fast. Fire-and-forget — failures are logged but must not crash the
+  // server, and the scan runs after connect() so it never delays startup.
+  if (config.warmCache) {
+    console.error('Warming AD object cache (TIE_WARM_CACHE=true)...');
+    getSharedStore(tieClient)
+      .warm(({ pages, objects }) => {
+        if (pages % 10 === 0) {
+          console.error(`  warmed ${objects} objects (${pages} pages)`);
+        }
+      })
+      .then(() => console.error('AD object cache warm.'))
+      .catch((err) =>
+        console.error(
+          `AD object cache warm failed (will build on first query): ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      );
+  }
 }
 
 main().catch((error) => {

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-07-11
+
+### Added
+- **Server-derived credential facts now shown in tool output.** `query_ad_objects`
+  and `get_ad_object` filter on the folded `isbreached` / `isweak` / `is*blank` /
+  `isweakByProfile` fields, but those weren't visible in the returned objects
+  (which show the raw API attributes). They now appear under a `derived` block so
+  you can see *why* a credential filter matched, without altering the faithful
+  `attributes` list.
+- README: a "Prompts that combine capabilities" section with cross-tool
+  natural-language use cases spanning search, permission decoding, the control
+  graph, and credential weakness (the 0.3.0 → 0.5.5 feature arc).
+
 ## [0.5.5] - 2026-07-11
 
 ### Added (control graph, Phase 5b — behind `TIE_BUILD_GRAPH`)

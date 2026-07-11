@@ -173,6 +173,23 @@ function makeADObjectClient() {
         },
       ],
     },
+    // Scan companion for bob (same DN) -> credential facts fold onto bob.
+    {
+      id: 5,
+      objectId: '1:guid-5:PasswordHashScan',
+      type: 'LDAP',
+      directoryId: 1,
+      objectAttributes: [
+        { name: 'objectclass', value: '["passwordHashScan"]', valueType: 'array/string' },
+        {
+          name: 'distinguishedname',
+          value: '"CN=bob,OU=Users,DC=alsid,DC=corp"',
+          valueType: 'string',
+        },
+        { name: 'isbreached', value: 'true', valueType: 'boolean' },
+        { name: 'isweak', value: '{"1":false,"2":true}', valueType: 'object' },
+      ],
+    },
   ];
   const fake = {
     get(path: string) {
@@ -347,4 +364,17 @@ test('get_tier0 reports built-in seeds plus derived de facto members', async () 
   // The escalation path for bob reads member -> ... -> seed.
   const bob = result.derived.find((d) => d.node.name === 'bob');
   assert.ok(bob && bob.escalationPath.length === bob.hops);
+});
+
+test('get_ad_object surfaces server-derived credential facts under `derived`', async () => {
+  const client = makeADObjectClient();
+  const result = (await tool('get_ad_object').handler(client, {
+    samAccountName: 'bob',
+  })) as { found: boolean; object?: { derived?: Record<string, unknown> } };
+
+  assert.equal(result.found, true);
+  // The scan companion (same DN) folded isbreached/isweak onto bob, and they
+  // show under `derived` even though they aren't in the raw attributes.
+  assert.equal(result.object?.derived?.isbreached, true);
+  assert.equal(result.object?.derived?.isweak, true);
 });

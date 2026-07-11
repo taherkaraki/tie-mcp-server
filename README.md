@@ -83,6 +83,37 @@ paging become single natural-language asks. A few that map directly onto
   `get_ad_object({ samAccountName: "Domain Admins" })`, then follow its `member`
   list into further queries — all served from the same cached snapshot.
 
+### Prompts that combine capabilities
+
+The real leverage is chaining search, permission decoding, the control graph, and
+credential weakness in one line of questioning. Natural-language prompts an
+orchestrator can answer by composing these tools:
+
+- *"Which non-privileged users can reach Domain Admins, and how?"* — `get_asset_exposure`
+  from the Tier-0 preset (reverse), each with its shortest control path.
+- *"If `bob` is phished, what's the blast radius?"* — `get_blast_radius({ principal: "bob" })`;
+  follows group membership, ACL control, delegation, SID history, GPO, and
+  password reuse.
+- *"What's our true Tier-0 — everyone who can *become* admin, not just group
+  members?"* — `get_tier0`, which returns built-in privileged groups **plus**
+  de-facto Tier-0 with the escalation path for each.
+- *"Who can DCSync the domain, and does any of them have a weak password?"* —
+  `query_ad_objects("isweak=true")` intersected with the DCSync-capable principals
+  surfaced by `get_tier0` / a path to the domain node.
+- *"Show me the shortest way `helpdesk` could take over the `Administrator`
+  account."* — `get_control_paths({ from: "helpdesk", to: "Administrator" })`;
+  paths run *through* domain compromise when that's the real route.
+- *"Who has dangerous rights on the Domain Admins object?"* —
+  `get_ad_object({ samAccountName: "Domain Admins", decodeSecurityDescriptor: true })`
+  to read the ACEs with trustees and rights resolved to names.
+- *"Which admins have a breached OR reused password AND a path to a domain
+  controller?"* — `query_ad_objects("admincount>0 AND isbreached=true")`, then
+  `get_blast_radius` from each — reused-password clusters and the domain
+  `Controls` edge do the reachability.
+- *"Find accounts that are kerberoastable, privileged, and weak all at once."* —
+  `query_ad_objects('admincount>0 AND serviceprincipalname:"/" AND isweak=true')`
+  — the drop-everything findings, in one expression.
+
 ### Permission decoding
 
 `ntSecurityDescriptor` is where AD stores who-can-do-what, but it arrives as raw

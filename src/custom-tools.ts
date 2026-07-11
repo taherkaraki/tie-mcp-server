@@ -82,14 +82,33 @@ export function getSharedStore(client: TIEClient): ADObjectStore {
   return getStore(client);
 }
 
-/** Shape a stored object for tool output: identity + full raw attributes. */
+/**
+ * Server-derived fields that are folded onto a principal's queryable record but
+ * aren't in the raw API attributes (so they'd otherwise be invisible in output).
+ * Surfaced under a `derived` block so callers can SEE why a credential filter
+ * matched, without polluting the faithful `attributes` list.
+ */
+const DERIVED_FIELDS = [
+  'isbreached',
+  'isntblank',
+  'islmblank',
+  'isweak',
+  'isweakbyprofile',
+] as const;
+
+/** Shape a stored object for tool output: identity + raw attributes + derived. */
 function presentObject(obj: StoredADObject) {
+  const derived: Record<string, unknown> = {};
+  for (const f of DERIVED_FIELDS) {
+    if (f in obj.record) derived[f] = obj.record[f];
+  }
   return {
     id: obj.id,
     objectId: obj.objectId,
     type: obj.type,
     directoryId: obj.directoryId,
     attributes: obj.raw.objectAttributes,
+    ...(Object.keys(derived).length > 0 ? { derived } : {}),
   };
 }
 

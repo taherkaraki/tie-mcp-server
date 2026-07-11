@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-07-11
+
+### Fixed (control graph — behind `TIE_BUILD_GRAPH`)
+- **Domain and OU nodes now resolve to readable names** instead of raw SID/GUID
+  keys. Node naming fell back only through `samAccountName`/`cn`, which domains
+  and OUs lack — so a `DCSync → <domain>` or `Contains → <OU>` hop displayed the
+  key. `GraphNode.name` now falls back further: `samAccountName` → `cn` →
+  (domain) `dnsRoot` or a DC-joined DN (`DC=alsid,DC=corp` → `alsid.corp`) →
+  (OU) `ou` (`OU:Servers`) → the leaf RDN of the DN. Benefits every consumer of
+  the graph (path/exposure tools, and downstream reporting) — no per-consumer
+  name resolution needed.
+
 ## [0.5.6] - 2026-07-11
 
 ### Added

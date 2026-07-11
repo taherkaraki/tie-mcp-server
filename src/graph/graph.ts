@@ -93,12 +93,13 @@ export class ControlGraph {
       const sid = strField(obj, 'objectsid');
       const dn = strField(obj, 'distinguishedname');
       const sam = strField(obj, 'samaccountname');
+      const type = classify(obj);
       g.nodes.set(key, {
         key,
         sid: sid?.toLowerCase() ?? null,
-        name: sam ?? strField(obj, 'cn'),
+        name: displayName(obj, type),
         dn,
-        type: classify(obj),
+        type,
         directoryId: obj.directoryId,
       });
       if (dn) {
@@ -297,6 +298,36 @@ export class ControlGraph {
 function strField(obj: StoredADObject, key: string): string | null {
   const v = obj.record[key];
   return typeof v === 'string' && v ? v : null;
+}
+
+/**
+ * Human-readable name for a node, falling back through the identifiers that
+ * actually exist per object class. Domains and OUs have no samAccountName/cn, so
+ * without this they surfaced as raw SID/GUID keys in graph output. Ladder:
+ *   samAccountName -> cn -> (domain) dnsRoot / DC-joined DN -> (OU) ou -> leaf RDN.
+ */
+function displayName(obj: StoredADObject, type: string): string | null {
+  const sam = strField(obj, 'samaccountname');
+  if (sam) return sam;
+  const cn = strField(obj, 'cn');
+  if (cn) return cn;
+  const dn = strField(obj, 'distinguishedname');
+  if (type === 'domain') {
+    const dnsRoot = strField(obj, 'dnsroot');
+    if (dnsRoot) return dnsRoot;
+    if (dn && dn.split(',').every((p) => p.trim().toUpperCase().startsWith('DC='))) {
+      return dn.split(',').map((p) => p.split('=', 2)[1]).join('.');
+    }
+  }
+  if (type === 'ou') {
+    const ou = strField(obj, 'ou');
+    if (ou) return `OU:${ou}`;
+  }
+  if (dn && dn.includes('=')) {
+    const val = dn.split(',')[0].split('=', 2)[1];
+    if (val) return val;
+  }
+  return null;
 }
 
 /** Best-effort node type from objectclass / samaccounttype. */

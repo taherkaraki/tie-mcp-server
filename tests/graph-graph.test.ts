@@ -231,3 +231,25 @@ test('a reuse cluster resolving to <2 members creates no hub', () => {
   const g = ControlGraph.build([userA, reuse], undefined, T);
   assert.equal(g.node('reuse:1:zz:passwordhashreuse'), undefined);
 });
+
+test('displayName resolves domain (dnsRoot) and OU names, not raw keys (Phase 6)', () => {
+  const domain = obj(
+    { objectsid: 'S-1-5-21-9-9-9', distinguishedname: 'DC=corp,DC=local',
+      objectclass: ['top', 'domainDNS'] },
+    '1:dom'
+  );
+  const ou = obj(
+    { distinguishedname: 'OU=Servers,DC=corp,DC=local', ou: 'Servers',
+      objectclass: ['top', 'organizationalUnit'] },
+    '9:ou-guid'
+  );
+  const gpo = obj(
+    { distinguishedname: 'CN={POL},CN=Policies,DC=corp,DC=local',
+      objectclass: ['top', 'groupPolicyContainer'] },
+    '9:gpo-guid'
+  );
+  const g = ControlGraph.build([domain, ou, gpo], undefined, T);
+  assert.equal(g.node('s-1-5-21-9-9-9')?.name, 'corp.local'); // domain via DN
+  assert.equal(g.node('9:ou-guid')?.name, 'OU:Servers'); // OU via ou attr
+  assert.equal(g.node('9:gpo-guid')?.name, '{POL}'); // GPO via leaf RDN fallback
+});

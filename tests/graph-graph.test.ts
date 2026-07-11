@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ControlGraph, type Edge } from '../src/graph/graph.js';
+import { reachable } from '../src/graph/traverse.js';
 import type { StoredADObject } from '../src/ad-object-store.js';
 
 function obj(record: Record<string, unknown>, objectId: string): StoredADObject {
@@ -183,4 +184,50 @@ test('GPO -> OU -> child chain composes through GpoAppliesTo + Contains (Phase 4
   const contains = ouOut.find((e) => e.kind === 'Contains');
   assert.ok(contains, 'OU should contain the computer');
   assert.equal(contains!.to, 's-1-5-21-1-2-3-1500');
+});
+
+test('passwordHashReuse builds a hub node with ReusedPassword edges (Phase 5b)', () => {
+  // Two users share a password hash; a reuse object links them by objectGuid.
+  const userA = obj(
+    { objectsid: 'S-1-5-21-1-2-3-1001', samaccountname: 'alice', objectguid: 'guid-a',
+      distinguishedname: 'CN=alice,DC=x', objectclass: ['user'] },
+    '1:alice'
+  );
+  const userB = obj(
+    { objectsid: 'S-1-5-21-1-2-3-1002', samaccountname: 'bob', objectguid: 'guid-b',
+      distinguishedname: 'CN=bob,DC=x', objectclass: ['user'] },
+    '1:bob'
+  );
+  const reuse = obj(
+    { objectclass: ['passwordHashReuse'], prefix: '89551',
+      reusedwithindomain: '{"1":["guid-a","guid-b"]}' },
+    '1:89551:PasswordHashReuse'
+  );
+  const g = ControlGraph.build([userA, userB, reuse], undefined, T);
+
+  // The reuse object is NOT a principal node, but a hub node exists.
+  const hubKey = 'reuse:1:89551:passwordhashreuse';
+  assert.equal(g.node(hubKey)?.type, 'passwordReuseCluster');
+
+  // alice -ReusedPassword-> hub -ReusedPassword-> bob, so alice reaches bob.
+  const res = reachable(g, ['s-1-5-21-1-2-3-1001'], 'forward');
+  const keys = res.reached.map((r) => r.node.key);
+  assert.ok(keys.includes(hubKey), 'reaches the shared-password hub');
+  assert.ok(keys.includes('s-1-5-21-1-2-3-1002'), 'reaches the other member through the hub');
+});
+
+test('a reuse cluster resolving to <2 members creates no hub', () => {
+  const userA = obj(
+    { objectsid: 'S-1-5-21-1-2-3-1001', samaccountname: 'alice', objectguid: 'guid-a',
+      distinguishedname: 'CN=alice,DC=x', objectclass: ['user'] },
+    '1:alice'
+  );
+  // reuse references guid-a plus a guid not in the store -> only 1 resolves.
+  const reuse = obj(
+    { objectclass: ['passwordHashReuse'], prefix: 'ZZ',
+      reusedwithindomain: '{"1":["guid-a","guid-missing"]}' },
+    '1:zz:PasswordHashReuse'
+  );
+  const g = ControlGraph.build([userA, reuse], undefined, T);
+  assert.equal(g.node('reuse:1:zz:passwordhashreuse'), undefined);
 });

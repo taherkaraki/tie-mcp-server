@@ -11,6 +11,7 @@ import {
   isSyntheticObject,
   parseIsWeak,
   credentialFactsFrom,
+  reuseClusterFrom,
 } from '../src/graph/credentials.js';
 
 test('hasObjectClass matches array and string forms', () => {
@@ -65,4 +66,29 @@ test('credentialFactsFrom omits isweak when the map is empty/absent', () => {
   const f = credentialFactsFrom({ isbreached: true });
   assert.equal(f.isweak, undefined);
   assert.equal(f.isweakByProfile, undefined);
+});
+
+test('reuseClusterFrom parses members from reusedwithindomain', () => {
+  const c = reuseClusterFrom({
+    objectclass: ['passwordHashReuse'],
+    prefix: '31D6C',
+    reusedwithindomain: '{"1":["AAA-1","bbb-2","CCC-3"]}',
+  });
+  assert.ok(c);
+  assert.equal(c!.prefix, '31D6C');
+  assert.deepEqual(c!.memberGuids, ['aaa-1', 'bbb-2', 'ccc-3']); // lower-cased
+});
+
+test('reuseClusterFrom flattens multiple buckets and rejects non-clusters', () => {
+  const multi = reuseClusterFrom({
+    objectclass: ['passwordHashReuse'],
+    reusedwithindomain: { '1': ['a'], '2': ['b', 'c'] },
+  });
+  assert.deepEqual(multi!.memberGuids.sort(), ['a', 'b', 'c']);
+
+  assert.equal(reuseClusterFrom({ objectclass: ['user'] }), null); // not a cluster
+  assert.equal(
+    reuseClusterFrom({ objectclass: ['passwordHashReuse'], reusedwithindomain: '{}' }),
+    null // no members
+  );
 });

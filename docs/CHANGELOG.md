@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-07-11
+## [0.5.5] - 2026-07-11
+
+### Added (control graph, Phase 5b — behind `TIE_BUILD_GRAPH`)
+- **`ReusedPassword` edges** from TIE's `passwordHashReuse` clusters (principals
+  sharing a password hash). Modeled through a per-cluster **hub node**
+  (`passwordReuseCluster`, e.g. "shared-password group (N members)") with
+  bidirectional member↔hub edges, so "compromise one, reach all who share the
+  hash" traverses without an N² edge blow-up. Members are resolved by
+  `objectGuid`; a cluster with fewer than 2 in-scope members creates no hub.
 
 ### Added (credential-weakness enrichment, Phase 5a)
 - **Password-analysis signal folded onto principals.** TIE emits `passwordHashScan`

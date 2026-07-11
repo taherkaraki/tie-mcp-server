@@ -77,6 +77,46 @@ export function parseIsWeak(value: unknown): Record<string, boolean> {
   return out;
 }
 
+/** A parsed passwordHashReuse cluster: principals sharing one password hash. */
+export interface ReuseCluster {
+  /** Grouping key (truncated hash fingerprint), e.g. "31D6C" (empty NT hash). */
+  prefix: string;
+  /** objectGuids (lower-cased) of the principals sharing the hash. */
+  memberGuids: string[];
+}
+
+/**
+ * Parse a passwordHashReuse record into a cluster, or null if it isn't one or
+ * carries no members. `reusedwithindomain` is `{"1":[guid, …]}` (the "1" key is
+ * an internal bucket, not a profile id here — we flatten all buckets).
+ */
+export function reuseClusterFrom(record: Record<string, unknown>): ReuseCluster | null {
+  if (!hasObjectClass(record, PASSWORD_HASH_REUSE_CLASS)) return null;
+  const prefix =
+    typeof record['prefix'] === 'string' ? (record['prefix'] as string) : '';
+
+  let obj: unknown = record['reusedwithindomain'];
+  if (typeof obj === 'string') {
+    try {
+      obj = JSON.parse(obj);
+    } catch {
+      return null;
+    }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+
+  const memberGuids: string[] = [];
+  for (const bucket of Object.values(obj as Record<string, unknown>)) {
+    if (Array.isArray(bucket)) {
+      for (const g of bucket) {
+        if (typeof g === 'string' && g) memberGuids.push(g.toLowerCase());
+      }
+    }
+  }
+  if (memberGuids.length === 0) return null;
+  return { prefix, memberGuids };
+}
+
 /** Derive the credential facts from a single passwordHashScan record. */
 export function credentialFactsFrom(scan: Record<string, unknown>): CredentialFacts {
   const facts: CredentialFacts = {};

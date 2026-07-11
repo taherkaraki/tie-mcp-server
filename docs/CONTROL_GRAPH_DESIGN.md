@@ -490,8 +490,18 @@ already scores the credential findings themselves.
    (`isbreached=true AND admincount>0`). New module `src/graph/credentials.ts`.
    Also fixes the live bug where scan objects appeared as bogus `get_tier0`
    members.
-2. **PR 5b** — `ReusedPassword` hub edges from `passwordHashReuse` + optional
-   credential entry-point seeding in the traversal tools.
+2. **PR 5b (DONE, edges)** — `ReusedPassword` hub edges from `passwordHashReuse`.
+   One hub node per cluster (keyed `reuse:<objectId>`, type
+   `passwordReuseCluster`), with bidirectional member↔hub edges — "compromise
+   one, reach all who share the hash" traverses through the hub with no N²
+   blow-up. Members resolved by `objectGuid` (new `byGuid` index); a cluster that
+   resolves to <2 in-scope members creates no hub.
+   **Deferred:** auto-seeding *all* weak-credential principals as entry points in
+   one traversal. Not needed for the workflow — credential weakness is queryable
+   (5a) so `query_ad_objects("isweak=true")` → `get_blast_radius(result)` already
+   composes, and `ReusedPassword` edges mean that blast radius includes the whole
+   reuse cluster automatically. A dedicated entry-point mode (with "compromised
+   from" result labeling) can be added deliberately later if wanted.
 
 Split so the store-layer enrichment (5a, no graph dependency) is reviewed apart
 from the graph/traversal change (5b).

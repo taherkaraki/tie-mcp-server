@@ -169,7 +169,10 @@ decoded SDDL:
   everything in the domain" primitive, synthesized at query time so paths
   continue *through* a domain takeover to a specific target. Example:
   `unpriv → owns GPO → GpoAppliesTo OU → Contains user → DCSync → domain →
-  Controls → Administrator`.
+  Controls → Administrator`, and
+- `ReusedPassword` (principal ↔ shared-password hub): principals sharing a
+  password hash (from TIE's reuse analysis) cluster on a hub node, so
+  compromising one reaches everyone who shares the credential.
 
 Three tools traverse it — all shortest-path (BFS), depth/breadth-capped, and
 cycle-safe:

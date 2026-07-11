@@ -44,7 +44,8 @@ export type EdgeKind =
   | 'GpLink' // OU/domain to links a GPO (provenance; inverse of GpoAppliesTo)
   | 'Contains' // container (OU/CN/domain) to directly contains child object
   | 'GpoAppliesTo' // GPO to an object in a linked OU/domain scope
-  | 'Controls'; // domain to an in-domain principal (VIRTUAL — never stored; synthesized at query time)
+  | 'Controls' // domain to an in-domain principal (VIRTUAL — never stored; synthesized at query time)
+  | 'ReusedPassword'; // principal <-> shared-password hub (shares a password hash with the cluster)
 
 /**
  * How the target reference in a raw edge should be resolved to a node key
@@ -65,7 +66,7 @@ export interface RawEdge {
   targetRef: TargetRef;
   kind: EdgeKind;
   /** Where the edge came from, for provenance in query output. */
-  via: 'member' | 'primaryGroup' | 'delegation' | 'rbcd' | 'sidHistory' | 'gplink' | 'dacl' | 'owner' | 'containment' | 'gpoScope' | 'domainControls';
+  via: 'member' | 'primaryGroup' | 'delegation' | 'rbcd' | 'sidHistory' | 'gplink' | 'dacl' | 'owner' | 'containment' | 'gpoScope' | 'domainControls' | 'passwordReuse';
   /** Optional detail (e.g. the ACE right tokens or a resolved right name). */
   detail?: string;
 }

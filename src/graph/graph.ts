@@ -22,7 +22,7 @@
 
 import type { StoredADObject } from '../ad-object-store.js';
 import { edgesForObject, nodeKeyFor, type EdgeKind, type RawEdge } from './edges.js';
-import { isSyntheticObject } from './credentials.js';
+import { isSyntheticObject, reuseClusterFrom } from './credentials.js';
 
 /** A resolved edge between two node keys. */
 export interface Edge {
@@ -61,6 +61,8 @@ export class ControlGraph {
   private byDn = new Map<string, string>();
   /** samAccountName (lower) -> node key, for lookup by SAM name. */
   private bySam = new Map<string, string>();
+  /** objectGuid (lower) -> node key; used to resolve passwordHashReuse members. */
+  private byGuid = new Map<string, string>();
   /** domain SID (lower, no RID) -> node keys of security principals in it. */
   private principalsByDomain = new Map<string, string[]>();
   /** node keys whose type is 'domain' (the domain-head hubs). */
@@ -110,6 +112,8 @@ export class ControlGraph {
       }
       if (sid) bySid.set(sid.toLowerCase(), key);
       if (sam) g.bySam.set(sam.toLowerCase(), key);
+      const guid = strField(obj, 'objectguid');
+      if (guid) g.byGuid.set(guid.toLowerCase(), key);
     }
 
     // Pass 1b: index domain heads and their in-domain security principals, so
@@ -145,6 +149,34 @@ export class ControlGraph {
         g.addEdge({ from, to, kind: raw.kind, via: raw.via, detail: raw.detail });
       }
       if (++processed % 5000 === 0) onProgress?.({ processed, total: objects.length });
+    }
+
+    // Pass 3: password-reuse clusters. Each passwordHashReuse object groups
+    // principals (by objectGuid) that share a password hash. Model as a HUB node
+    // per cluster with ReusedPassword edges member<->hub (not N^2 pairwise), so
+    // "compromise one, reach all who share the hash" traverses through the hub.
+    // (§10.4)
+    for (const obj of objects) {
+      const cluster = reuseClusterFrom(obj.record);
+      if (!cluster) continue;
+      const members = cluster.memberGuids
+        .map((guid) => g.byGuid.get(guid))
+        .filter((k): k is string => !!k);
+      if (members.length < 2) continue; // a cluster of one isn't reuse
+
+      const hubKey = `reuse:${obj.objectId.toLowerCase()}`;
+      g.nodes.set(hubKey, {
+        key: hubKey,
+        sid: null,
+        name: `shared-password group (${members.length} members)`,
+        dn: null,
+        type: 'passwordReuseCluster',
+        directoryId: obj.directoryId,
+      });
+      for (const m of members) {
+        g.addEdge({ from: m, to: hubKey, kind: 'ReusedPassword', via: 'passwordReuse' });
+        g.addEdge({ from: hubKey, to: m, kind: 'ReusedPassword', via: 'passwordReuse' });
+      }
     }
 
     g.builtMs = now() - start;

@@ -25,6 +25,11 @@ import { parseQuery } from './query/parser.js';
 import { evaluate, type QueryRecord } from './query/evaluate.js';
 import { buildSchemaMap, type SchemaMap } from './graph/schema-map.js';
 import { ControlGraph, type GraphProgress } from './graph/graph.js';
+import {
+  hasObjectClass,
+  credentialFactsFrom,
+  PASSWORD_HASH_SCAN_CLASS,
+} from './graph/credentials.js';
 
 /** The raw ad-object shape returned by the API. */
 interface RawADObject {
@@ -163,6 +168,45 @@ export class ADObjectStore {
     }
 
     this.objects = collected;
+
+    // Credential-weakness enrichment: fold each passwordHashScan companion
+    // object onto the principal it describes (joined by distinguishedName), so
+    // isbreached / is*blank / isweak become queryable attributes on the
+    // principal. Scan objects themselves stay in `objects` (they're filtered out
+    // of the control graph, not the store) but contribute their signal here.
+    // (Phase 5a, CONTROL_GRAPH_DESIGN §10.3)
+    const scanByDn = new Map<string, QueryRecord>();
+    for (const obj of collected) {
+      if (!hasObjectClass(obj.record, PASSWORD_HASH_SCAN_CLASS)) continue;
+      const dn = obj.record['distinguishedname'];
+      // Only Retrieved scans carry meaningful flags; skip empty-DN records.
+      if (typeof dn === 'string' && dn) scanByDn.set(dn.toLowerCase(), obj.record);
+    }
+    if (scanByDn.size > 0) {
+      for (const obj of collected) {
+        if (hasObjectClass(obj.record, PASSWORD_HASH_SCAN_CLASS)) continue; // don't self-enrich
+        const dn = obj.record['distinguishedname'];
+        if (typeof dn !== 'string' || !dn) continue;
+        const scan = scanByDn.get(dn.toLowerCase());
+        if (!scan) continue;
+        const facts = credentialFactsFrom(scan);
+        // Fold derived facts onto the principal's queryable record. Don't clobber
+        // a real same-named attribute the principal already has.
+        for (const [k, v] of Object.entries(facts)) {
+          if (v === undefined) continue;
+          // Record keys are lower-cased throughout (query field lookup lower-
+          // cases too), so fold with a lower-cased key or camelCase facts like
+          // isweakByProfile become unreachable.
+          const key = k.toLowerCase();
+          if (key in obj.record) continue; // don't clobber a real attribute
+          // The flat record holds only scalars/arrays; store the object-valued
+          // isweakByProfile as its JSON string (matches how object-typed attrs
+          // are normalized), so `:` contains-matching works on it.
+          obj.record[key] =
+            typeof v === 'object' ? (JSON.stringify(v) as NormalizedValue) : (v as NormalizedValue);
+        }
+      }
+    }
 
     // Rebuild the SID index and invalidate the derived schema map so both
     // reflect the new snapshot generation.

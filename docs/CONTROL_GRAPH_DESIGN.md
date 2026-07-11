@@ -394,3 +394,105 @@ honest answer is "everything" (summarized, not exploded).
 Split so the concrete stored edges (4a) are reviewed separately from the
 virtual-expansion traversal change (4b), where the subtle correctness lives.
 
+## 10. Phase 5 — credential-weakness layer (breached / weak / reused)
+
+Status: **proposed**. TIE's `list_ad_objects` feed includes password-analysis
+companion objects (Tenable's privileged/hash analysis). Today the graph
+mis-handles them: a `passwordHashScan` object shares its principal's DN, so
+DN-based edge resolution can bind an edge endpoint to the *scan record* instead
+of the real principal — which is why scan objects surfaced as bogus "members" of
+Administrators / derived Tier-0. Phase 5 fixes that and turns the credential
+signal into first-class facts and attack-graph entry points.
+
+### 10.1 The two source object types
+
+Both are `type:"LDAP"` with a distinguishing `objectclass`, keyed by an objectId
+suffix:
+
+- **`passwordHashScan`** — one per analyzed principal. Join back to the principal
+  by **`distinguishedName`** (its own `objectguid` is the scan record's, not the
+  principal's). Attributes: `isbreached` (bool), `islmblank`, `isntblank` (bool),
+  `isweak` (object — see 10.3), `retrievalstate` (`Retrieved` | `NotReachable`;
+  only `Retrieved` records carry meaningful flags).
+- **`passwordHashReuse`** — a shared-hash equivalence class. `prefix` = truncated
+  hash fingerprint (grouping key; `31D6C…` is the empty-password NT hash).
+  `reusedwithindomain` = `{"1": [objectGuid, …]}` — the principals (by
+  **objectGuid**) that share that hash. Clusters range from a few to ~450 members.
+
+### 10.2 Fix: scan/reuse objects are NOT graph nodes
+
+- **Exclude** `passwordHashScan` / `passwordHashReuse` (and any non-directory
+  synthetic `objectclass`) from graph node admission. They are data *about*
+  principals, not principals.
+- This also fixes the DN-collision: with scan objects gone from the node set, an
+  edge's DN target resolves to the real principal. Add a guard regardless — when
+  two objects share a DN, prefer the one with an `objectSID` / a real directory
+  `objectclass`.
+
+### 10.3 Enrichment: fold the signal onto the principal (store layer)
+
+At store-build time, join each `Retrieved` `passwordHashScan` onto its principal
+(by DN) and expose queryable attributes on the principal's record:
+
+- `isbreached`, `isntblank`, `islmblank` — booleans, passed through.
+- **`isweak`** (derived boolean) = **OR across all profile keys**. The `isweak`
+  map's keys are **profile IDs** (TIE config lenses); a true value means the
+  password is weak under that profile — either a configured weak/dictionary
+  match (Company123-style) OR empty / equals samAccountName. OR-ing is the honest
+  "is this a risk?" signal and is not lossy. Because of this, the query engine
+  needs **no dotted sub-key access** for the common case — `isweak=true` works.
+- **`isweakByProfile`** — the raw `{profileId: bool}` map, preserved for the finer
+  query "weak specifically under profile N".
+
+Result: `query_ad_objects("isbreached=true AND admincount>0")`,
+`query_ad_objects("isweak=true AND <...>")` work directly — no graph required.
+(See the project note on isweak for the confirmed semantics.)
+
+### 10.4 New edges
+
+| EdgeKind        | from → to                          | Meaning (self-contained) |
+|-----------------|-------------------------------------|--------------------------|
+| `ReusedPassword`| principal ↔ hash-cluster hub        | shares a password hash with the cluster |
+
+- **`ReusedPassword` via a cluster HUB node**, not N² pairwise edges (same
+  articulation-point rule as the domain node). Synthesize one hub node per
+  `passwordHashReuse` object; emit `principal -ReusedPassword-> hub` and
+  `hub -ReusedPassword-> principal` for each member. A 450-member cluster =
+  ~900 edges, not ~200k. Traversal through the hub gives "compromise one, reach
+  all who share the hash" without the blow-up.
+- The hub is an internal graph node (keyed by the reuse object's prefix/id), not
+  an AD principal; results should render it as "shared-password group (N members)"
+  rather than a fake object.
+
+### 10.5 Credential entry points (traversal)
+
+A breached / weak / blank / reused credential is a compromise primitive that
+needs **no ACL chain** — an attacker who cracks or knows the password owns the
+principal directly. Model this as an optional **entry-point set** for queries:
+
+- `get_asset_exposure` / `get_tier0`: optionally seed reverse traversal so that
+  any principal with a weak credential is treated as *already compromisable*,
+  surfacing "weak-credential principal → … → Tier-0" as the highest-value
+  finding (attacker needs only to crack a hash, then walk the graph).
+- `get_blast_radius`: unchanged start semantics, but `ReusedPassword` edges mean
+  compromising one principal reaches its whole reuse cluster.
+
+Framing stays **facts, not verdicts**: we report "has weak/breached/reused
+credential" and the reachability it enables; we do not score it. Tenable's IoE
+already scores the credential findings themselves.
+
+### 10.6 Build order (Phase 5)
+
+1. **PR 5a (DONE)** — node-admission filter (exclude scan/reuse synthetic
+   classes) + DN-collision guard + fold `passwordHashScan` onto principals
+   (`isbreached`, `is*blank`, derived `isweak` OR-across-profiles,
+   `isweakByProfile`). Pure enrichment; immediately useful via `query_ad_objects`
+   (`isbreached=true AND admincount>0`). New module `src/graph/credentials.ts`.
+   Also fixes the live bug where scan objects appeared as bogus `get_tier0`
+   members.
+2. **PR 5b** — `ReusedPassword` hub edges from `passwordHashReuse` + optional
+   credential entry-point seeding in the traversal tools.
+
+Split so the store-layer enrichment (5a, no graph dependency) is reviewed apart
+from the graph/traversal change (5b).
+

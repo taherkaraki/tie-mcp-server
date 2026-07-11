@@ -70,8 +70,11 @@ paging become single natural-language asks. A few that map directly onto
   attempts": `admincount>0 AND badpwdcount>0`.
 - **Kerberoast exposure** — "user accounts that have an SPN set":
   `serviceprincipalname:"/" AND type=LDAP` (any SPN contains a `/`).
-- **Breached / reused passwords among the privileged** — "privileged accounts
-  flagged with a breached password": `admincount>0 AND isbreached=true`.
+- **Weak / breached passwords among the privileged** — "privileged accounts with
+  a breached password": `admincount>0 AND isbreached=true`, or a weak password
+  under any profile's policy: `admincount>0 AND isweak=true`. (These come from
+  TIE's password-hash analysis, joined onto the principal — see
+  [Credential weakness](#credential-weakness).)
 - **Stale but enabled accounts** — combine `enabled=true` with a
   `lastlogontimestamp` bound to surface dormant-yet-active identities.
 - **Delegation risk sweep** — "accounts trusted for delegation":
@@ -119,6 +122,32 @@ This is deliberately **facts, not verdicts** — it reports *who has which right
 and leaves severity to you or to Tenable's Indicators of Exposure. It is also the
 foundation for the control-graph analysis below; see
 [docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
+
+### Credential weakness
+
+TIE runs a password-hash analysis and emits a `passwordHashScan` companion object
+per analyzed principal. The server joins that signal back onto the principal (by
+distinguished name), so credential weakness is directly queryable:
+
+- `isbreached` — password appears in a breached-password set.
+- `islmblank` / `isntblank` — blank LM / NT hash.
+- `isweak` — derived boolean: weak under **at least one** profile's policy. The
+  underlying signal is per-profile (a TIE profile is a configuration lens), and a
+  password is "weak" when it matches a configured weak/dictionary password or is
+  empty / equals the samAccountName. The raw per-profile breakdown is preserved
+  as `isweakByProfile` (`{ profileId: bool }`) for finer questions.
+
+```typescript
+query_ad_objects({ expression: "isweak=true AND admincount>0" })       // weak-password admins
+query_ad_objects({ expression: "isbreached=true" })                     // breached passwords
+// weak specifically under profile 2 (fields are case-insensitive; the raw map
+// is matched as a substring):
+query_ad_objects({ expression: 'isweakByProfile:"\\"2\\":true"' })
+```
+
+Facts, not verdicts — TIE's Indicators of Exposure already score these findings;
+this just makes them queryable alongside every other attribute (and, in a planned
+step, usable as attack-path entry points).
 
 ### Attack-path analysis (control graph)
 

@@ -224,3 +224,84 @@ test('a forced re-scan invalidates the control graph', async () => {
   assert.equal(store.graphStatus().state, 'absent', 'graph invalidated on rebuild');
   assert.equal(store.getGraph(), null);
 });
+
+test('credential enrichment folds passwordHashScan onto the principal by DN', async () => {
+  const objs = [
+    // A user with a weak/breached password, and its scan companion (same DN).
+    obj(100, 1, [
+      { name: 'cn', value: '"Miguel Clarke"', valueType: 'string' },
+      { name: 'samaccountname', value: '"miguel.clarke"', valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=Miguel Clarke,OU=Alsid,DC=alsid,DC=corp"', valueType: 'string' },
+      { name: 'objectsid', value: '"S-1-5-21-1-2-3-1500"', valueType: 'string' },
+      { name: 'admincount', value: '1', valueType: 'integer' },
+    ]),
+    obj(101, 1, [
+      { name: 'objectclass', value: '["passwordHashScan"]', valueType: 'array/string' },
+      { name: 'distinguishedname', value: '"CN=Miguel Clarke,OU=Alsid,DC=alsid,DC=corp"', valueType: 'string' },
+      { name: 'isbreached', value: 'true', valueType: 'boolean' },
+      { name: 'isweak', value: '{"1":false,"2":true,"8":false}', valueType: 'object' },
+    ]),
+  ];
+  const { client } = makePagingClient(objs);
+  const store = new ADObjectStore(client);
+
+  // The principal now answers credential queries via the folded facts.
+  const breachedAdmins = await store.query('isbreached=true AND admincount>0');
+  assert.equal(breachedAdmins.total, 1);
+  assert.equal(breachedAdmins.returned[0].record['samaccountname'], 'miguel.clarke');
+
+  const weak = await store.query('isweak=true');
+  assert.equal(weak.total, 1); // OR across profiles -> weak (profile 2 true)
+
+  // The scan companion object itself is not counted as weak/breached (not enriched).
+  const rec = breachedAdmins.returned[0].record;
+  assert.equal(rec['isbreached'], true);
+  assert.equal(rec['isweak'], true);
+});
+
+test('control graph excludes synthetic passwordHashScan objects as nodes', async () => {
+  const objs = [
+    obj(200, 1, [
+      { name: 'cn', value: '"realuser"', valueType: 'string' },
+      { name: 'samaccountname', value: '"realuser"', valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=realuser,DC=x"', valueType: 'string' },
+      { name: 'objectsid', value: '"S-1-5-21-1-2-3-1600"', valueType: 'string' },
+      { name: 'objectclass', value: '["top","person","user"]', valueType: 'array/string' },
+    ]),
+    obj(201, 1, [
+      { name: 'objectclass', value: '["passwordHashScan"]', valueType: 'array/string' },
+      { name: 'distinguishedname', value: '"CN=realuser,DC=x"', valueType: 'string' },
+      { name: 'isbreached', value: 'true', valueType: 'boolean' },
+    ]),
+  ];
+  const { client } = makePagingClient(objs);
+  const store = new ADObjectStore(client);
+  await store.buildGraph();
+  const stats = store.graphStatus().stats;
+  // Only the real user is a node; the scan companion is excluded.
+  assert.equal(stats?.nodes, 1);
+});
+
+test('isweakByProfile is folded as a queryable JSON string', async () => {
+  const objs = [
+    obj(300, 1, [
+      { name: 'samaccountname', value: '"jane"', valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=jane,DC=x"', valueType: 'string' },
+      { name: 'objectsid', value: '"S-1-5-21-1-2-3-1700"', valueType: 'string' },
+    ]),
+    obj(301, 1, [
+      { name: 'objectclass', value: '["passwordHashScan"]', valueType: 'array/string' },
+      { name: 'distinguishedname', value: '"CN=jane,DC=x"', valueType: 'string' },
+      { name: 'isweak', value: '{"1":false,"2":true,"8":false}', valueType: 'object' },
+    ]),
+  ];
+  const { client } = makePagingClient(objs);
+  const store = new ADObjectStore(client);
+
+  // Per-profile map is stored (lower-cased key) as a JSON string and is
+  // substring-queryable; weak specifically under profile 2.
+  const res = await store.query('isweakbyprofile:"\\"2\\":true"');
+  assert.equal(res.total, 1);
+  assert.equal(res.returned[0].record['samaccountname'], 'jane');
+  assert.equal(typeof res.returned[0].record['isweakbyprofile'], 'string');
+});

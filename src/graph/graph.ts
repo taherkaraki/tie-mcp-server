@@ -22,6 +22,7 @@
 
 import type { StoredADObject } from '../ad-object-store.js';
 import { edgesForObject, nodeKeyFor, type EdgeKind, type RawEdge } from './edges.js';
+import { isSyntheticObject } from './credentials.js';
 
 /** A resolved edge between two node keys. */
 export interface Edge {
@@ -80,6 +81,12 @@ export class ControlGraph {
     const byDn = g.byDn;
     const bySid = new Map<string, string>();
     for (const obj of objects) {
+      // Skip TIE's synthetic analysis objects (passwordHashScan / -Reuse): they
+      // are data ABOUT principals, not principals, and share a principal's DN —
+      // admitting them as nodes produced bogus edges (e.g. fake Tier-0 members).
+      // Their signal is folded onto principals in the store layer (§10.2/10.3).
+      if (isSyntheticObject(obj.record)) continue;
+
       const key = nodeKeyFor(obj);
       const sid = strField(obj, 'objectsid');
       const dn = strField(obj, 'distinguishedname');
@@ -92,7 +99,15 @@ export class ControlGraph {
         type: classify(obj),
         directoryId: obj.directoryId,
       });
-      if (dn) byDn.set(dn.toLowerCase(), key);
+      if (dn) {
+        // On a DN collision, prefer the real principal (has a SID) over a
+        // SID-less object so edges resolve to the principal, not a companion.
+        const dnKey = dn.toLowerCase();
+        const incumbent = byDn.get(dnKey);
+        if (!incumbent || (sid && !g.nodes.get(incumbent)?.sid)) {
+          byDn.set(dnKey, key);
+        }
+      }
       if (sid) bySid.set(sid.toLowerCase(), key);
       if (sam) g.bySam.set(sam.toLowerCase(), key);
     }

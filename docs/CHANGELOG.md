@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-11
+
+### Added (credential-weakness enrichment, Phase 5a)
+- **Password-analysis signal folded onto principals.** TIE emits `passwordHashScan`
+  companion objects (one per analyzed principal, linked by `distinguishedName`);
+  their signal is now joined onto the principal and exposed as queryable
+  attributes, so `query_ad_objects` can filter on credential weakness directly —
+  e.g. `isbreached=true AND admincount>0`, or `isweak=true`. Fields:
+  `isbreached`, `isntblank`, `islmblank`, derived `isweak`, and `isweakByProfile`.
+- **`isweak` semantics resolved.** The `isweak` map's keys are **profile IDs**
+  (TIE config lenses); `isweak[profileId]` is whether the password is weak under
+  that profile's policy (a configured weak/dictionary match, or empty / equals
+  samAccountName). We expose a derived boolean `isweak` = **OR across all
+  profiles** ("weak under at least one policy") plus the raw `isweakByProfile`
+  map. New module `src/graph/credentials.ts`.
+
+### Fixed (control graph — behind `TIE_BUILD_GRAPH`)
+- **Synthetic analysis objects no longer become graph nodes.** `passwordHashScan`
+  / `passwordHashReuse` objects share a principal's DN and were being admitted as
+  nodes, producing bogus edges (e.g. fake `get_tier0` / Administrators members).
+  They are now excluded from node admission, and a DN-collision guard prefers the
+  real principal (has an objectSID) when two objects share a DN.
+
 ## [0.5.0] - 2026-07-11
 
 ### Added (control graph, Phase 4b — behind `TIE_BUILD_GRAPH`)

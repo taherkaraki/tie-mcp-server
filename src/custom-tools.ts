@@ -27,6 +27,8 @@ import { QuerySyntaxError } from './query/lexer.js';
 import { decodeSecurityDescriptor } from './graph/decode.js';
 import { reachable, shortestPath, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './graph/traverse.js';
 import type { ControlGraph } from './graph/graph.js';
+import { DevianceStore, type DirectoryRef } from './deviance/store.js';
+import { identity360, identity360Summary } from './deviance/identity360.js';
 
 /**
  * Optional per-call context the server passes to a custom tool handler. Carries
@@ -61,16 +63,46 @@ export interface CustomTool {
  * any tool call to take effect. Absent config falls back to the store defaults.
  */
 let sharedStore: ADObjectStore | null = null;
+let sharedDevianceStore: DevianceStore | null = null;
 let storeOptions: StoreOptions = {};
+/** Base URL of the TIE console, for building UI deeplinks. Set at startup. */
+let consoleBaseUrl = '';
 
 /** Configure the shared store before first use (called once at startup). */
-export function configureStore(options: StoreOptions): void {
-  storeOptions = options;
+export function configureStore(options: StoreOptions & { baseUrl?: string }): void {
+  storeOptions = { ttlMs: options.ttlMs };
+  if (options.baseUrl) consoleBaseUrl = options.baseUrl;
 }
 
 function getStore(client: TIEClient): ADObjectStore {
   if (!sharedStore) sharedStore = new ADObjectStore(client, storeOptions);
   return sharedStore;
+}
+
+function getDevianceStore(client: TIEClient): DevianceStore {
+  if (!sharedDevianceStore) sharedDevianceStore = new DevianceStore(client, storeOptions);
+  return sharedDevianceStore;
+}
+
+/** Resolve the effective profile: explicit id, else the user's preferred profile. */
+async function resolveProfile(
+  client: TIEClient,
+  explicit: number | undefined
+): Promise<{ id: number; name: string }> {
+  const profiles = await client.get<Profile[]>('/api/profiles');
+  let id = explicit;
+  if (id === undefined) {
+    const prefs = await client.get<Preferences>('/api/preferences');
+    id = prefs.preferredProfileId ?? profiles[0]?.id ?? 1;
+  }
+  const name = profiles.find((p) => p.id === id)?.name ?? String(id);
+  return { id, name };
+}
+
+/** All (infrastructure, directory) pairs to scan, from the topology. */
+async function allDirectories(client: TIEClient): Promise<DirectoryRef[]> {
+  const dirs = await client.get<Directory[]>('/api/directories');
+  return dirs.map((d) => ({ infrastructureId: d.infrastructureId, directoryId: d.id }));
 }
 
 /**
@@ -703,4 +735,187 @@ export const customTools: CustomTool[] = [
       };
     },
   },
+  {
+    name: 'get_identity_360',
+    description:
+      'Identity exposure 360: for a single AD object, return every Indicator-of-' +
+      'Exposure deviance that concerns it, enriched and sorted by severity. Goes ' +
+      "beyond Tenable's per-object view by resolving THREE layers: (1) target — " +
+      'deviances Tenable filed directly on this object; (2) trustee — deviances ' +
+      'where this identity is the dangerous principal embedded inside ANOTHER ' +
+      "object's finding (e.g. a risky ACE in a Dangerous-ACE list), which never " +
+      'appear under this object in Tenable; (3) inherited — deviances on a ' +
+      'container/partition this object sits under, whose exposure inherits down. ' +
+      'Each deviance carries its checker, reason, severity (raw O-CRITICITY plus ' +
+      'the Critical/High/Medium/Low band), remediation cost (raw plus band), the ' +
+      'related counterpart object, granted rights, resolved/ignored state, and a ' +
+      'deeplink into the Tenable UI (plus a filter hint to narrow to the exact ' +
+      'object). Provide exactly one of distinguishedName, sid, samAccountName, or ' +
+      'objectId. Severity is profile-specific; omit profileId to use the preferred ' +
+      'profile. Layer 3 requires the control graph and builds it on first use ' +
+      '(tens of seconds on a large tenant). Deviances from checkers DISABLED in ' +
+      'the profile/directory are excluded by default (see summary.suppressed). ' +
+      'Facts only. CACHING: deviances + checker config are cached for a long TTL; ' +
+      'pass refresh:true to force a rescan.',
+    category: 'Deviance',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        distinguishedName: { type: 'string', description: 'Exact DN of the identity.' },
+        sid: { type: 'string', description: 'Object SID of the identity.' },
+        samAccountName: { type: 'string', description: 'SAM account name of the identity.' },
+        objectId: { type: 'integer', description: 'Tenable AD object id of the identity.' },
+        profileId: { type: 'integer', description: 'Profile (lens) id. Omit for the preferred profile.' },
+        includeTarget: { type: 'boolean', description: 'Include deviances filed on the object (default true).' },
+        includeTrustee: { type: 'boolean', description: 'Include deviances where the object is the risky trustee (default true).' },
+        includeInherited: { type: 'boolean', description: 'Include container/partition-inherited deviances (default true; builds the graph).' },
+        minSeverityBand: { type: 'string', enum: ['Critical', 'High', 'Medium', 'Low'], description: 'Only return deviances at or above this band.' },
+        includeResolved: { type: 'boolean', description: 'Include resolved deviances (default false).' },
+        includeIgnored: { type: 'boolean', description: 'Include ignored deviances (default false).' },
+        includeDisabledCheckers: { type: 'string', enum: ['exclude', 'flag', 'include'], description: 'How to treat deviances from disabled checkers (default exclude).' },
+        refresh: { type: 'boolean', description: 'Force a fresh deviance scan instead of the cached index.' },
+      },
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      return runIdentity360(client, args, ctx, false);
+    },
+  },
+  {
+    name: 'get_identity_360_summary',
+    description:
+      'Batch identity-exposure roll-up: for a list of AD objects, return per-' +
+      'identity deviance COUNTS by severity band (Critical/High/Medium/Low), by ' +
+      'layer (target/trustee/inherited), the total, and the single highest ' +
+      'severity — but NOT the full deviance lists. Designed to populate per-user ' +
+      'badges in a report (e.g. an attack path of several users, each showing its ' +
+      'Critical/High/Medium/Low tally) in one call; drill into any identity with ' +
+      'get_identity_360 for the full, sorted, deep-linked findings. Accepts a mix ' +
+      'of distinguishedName / sid / samAccountName / objectId (as strings or ' +
+      'numbers); unresolved inputs are returned with resolved:false rather than ' +
+      'failing the batch. Counts use the same layers, profile, and filters as ' +
+      'get_identity_360, so a badge here always matches the expanded view there. ' +
+      'Omit profileId to use the preferred profile. Facts only. CACHING: shares ' +
+      'the cached deviance index with get_identity_360 (this call warms it).',
+    category: 'Deviance',
+    safety: 'read',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        identities: {
+          type: 'array',
+          items: { type: ['string', 'integer'] },
+          description: 'Identities to summarize (DN / SID / samAccountName / objectId).',
+        },
+        profileId: { type: 'integer', description: 'Profile (lens) id. Omit for the preferred profile.' },
+        includeTarget: { type: 'boolean', description: 'Include target-layer deviances (default true).' },
+        includeTrustee: { type: 'boolean', description: 'Include trustee-layer deviances (default true).' },
+        includeInherited: { type: 'boolean', description: 'Include inherited-layer deviances (default true; builds the graph).' },
+        minSeverityBand: { type: 'string', enum: ['Critical', 'High', 'Medium', 'Low'], description: 'Only count deviances at or above this band.' },
+        includeResolved: { type: 'boolean', description: 'Include resolved deviances (default false).' },
+        includeIgnored: { type: 'boolean', description: 'Include ignored deviances (default false).' },
+        includeDisabledCheckers: { type: 'string', enum: ['exclude', 'flag', 'include'], description: 'How to treat deviances from disabled checkers (default exclude).' },
+        refresh: { type: 'boolean', description: 'Force a fresh deviance scan instead of the cached index.' },
+      },
+      required: ['identities'],
+      additionalProperties: false,
+    },
+    async handler(client, args, ctx) {
+      return runIdentity360(client, args, ctx, true);
+    },
+  },
 ];
+
+/**
+ * Shared setup for both identity-360 tools: resolve the profile, warm the
+ * deviance index (and the control graph when inheritance is on), then dispatch
+ * to the single or batch projection. Returns the tool's JSON result.
+ */
+async function runIdentity360(
+  client: TIEClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext | undefined,
+  batch: boolean
+): Promise<unknown> {
+  const bool = (v: unknown, dflt: boolean) => (typeof v === 'boolean' ? v : dflt);
+  const params = {
+    profileId: typeof args.profileId === 'number' ? args.profileId : undefined,
+    includeTarget: bool(args.includeTarget, true),
+    includeTrustee: bool(args.includeTrustee, true),
+    includeInherited: bool(args.includeInherited, true),
+    disabledCheckers: (['exclude', 'flag', 'include'] as const).includes(args.includeDisabledCheckers as never)
+      ? (args.includeDisabledCheckers as 'exclude' | 'flag' | 'include')
+      : 'exclude',
+    includeResolved: bool(args.includeResolved, false),
+    includeIgnored: bool(args.includeIgnored, false),
+    minSeverityBand: (['Critical', 'High', 'Medium', 'Low'] as const).includes(args.minSeverityBand as never)
+      ? (args.minSeverityBand as 'Critical' | 'High' | 'Medium' | 'Low')
+      : undefined,
+  };
+  const force = args.refresh === true;
+
+  const adStore = getStore(client);
+  const devStore = getDevianceStore(client);
+  const [profile, directories, dirs] = await Promise.all([
+    resolveProfile(client, params.profileId),
+    allDirectories(client),
+    client.get<Directory[]>('/api/directories'),
+  ]);
+  const dirName = (id: number) => dirs.find((d) => d.id === id)?.name ?? null;
+
+  await devStore.ensureLoaded(profile.id, directories, {
+    force,
+    onProgress: ctx?.reportProgress
+      ? ({ deviances }) => ctx.reportProgress?.({ pages: 0, objects: deviances })
+      : undefined,
+  });
+
+  // Layer ③ needs the control graph; build it on demand (progress bridged).
+  let graph = null as ControlGraph | null;
+  if (params.includeInherited) {
+    await adStore.buildGraph(
+      ctx?.reportProgress ? ({ processed, total }) => ctx.reportProgress?.({ pages: processed, objects: total }) : undefined
+    );
+    graph = adStore.getGraph();
+  }
+
+  const stores = { adStore, devStore, graph };
+  const opts = {
+    baseUrl: consoleBaseUrl,
+    profileName: profile.name,
+    disabledCheckers: params.disabledCheckers,
+    includeResolved: params.includeResolved,
+    includeIgnored: params.includeIgnored,
+    minSeverityBand: params.minSeverityBand,
+  };
+  const meta = {
+    profile: { id: profile.id, name: profile.name, wasDefault: params.profileId === undefined },
+    layersIncluded: [
+      params.includeTarget ? 'target' : null,
+      params.includeTrustee ? 'trustee' : null,
+      params.includeInherited && graph ? 'inherited' : null,
+    ].filter(Boolean),
+    graphBuilt: graph !== null,
+    index: devStore.stats(),
+  };
+
+  if (batch) {
+    const identities = Array.isArray(args.identities) ? (args.identities as Array<string | number>) : [];
+    const refs = identities.map((v) => (typeof v === 'number' ? { objectId: v } : v));
+    const res = await identity360Summary(stores, refs, params, opts, dirName);
+    return { ...res, meta };
+  }
+  const ref = {
+    distinguishedName: args.distinguishedName as string | undefined,
+    sid: args.sid as string | undefined,
+    samAccountName: args.samAccountName as string | undefined,
+    objectId: typeof args.objectId === 'number' ? args.objectId : undefined,
+  };
+  const provided = [ref.distinguishedName, ref.sid, ref.samAccountName, ref.objectId].filter((v) => v !== undefined);
+  if (provided.length !== 1) {
+    return { error: 'Provide exactly one of distinguishedName, sid, samAccountName, or objectId.' };
+  }
+  const res = await identity360(stores, ref, params, opts, dirName);
+  return { ...res, meta };
+}

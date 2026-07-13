@@ -6,8 +6,8 @@ Model Context Protocol (MCP) server for Tenable Identity Exposure API.
 
 - Complete coverage of all 131 TIE API operations (one MCP tool per endpoint)
 - Additional convenience tools for discovery, navigation, in-memory AD object
-  search, permission decoding, and control-graph attack-path analysis (7 custom
-  tools)
+  search, permission decoding, control-graph attack-path analysis, and a
+  per-identity **deviance 360 view** (9 custom tools)
 - Client-side credential management for security
 - Multi-tenant support (multiple TIE environments)
 - Granular tool-level security controls
@@ -49,6 +49,14 @@ turns the API into something an LLM can use effectively:
   ("how does X become Domain Admin?"), and asset exposure ("who can reach my
   Tier-0?"). Edges come from group membership, ACL rights, delegation, SID
   history and more. See [Attack-path analysis](#attack-path-analysis-control-graph).
+- **Per-identity deviance 360.** Tenable files each Indicator-of-Exposure
+  deviance against one object, so its own per-object view misses the cases where
+  an identity is the *risky trustee* buried inside another object's finding, or
+  inherits exposure from a container it sits under. `get_identity_360` resolves
+  all three layers (target / trustee / inherited), joins in severity and
+  remediation bands, and deep-links back into the Tenable UI — the exposure
+  picture the console can't assemble on its own. See
+  [Identity 360](#identity-360-deviance-view).
 - **Composed discovery tools.** `get_topology` and `get_preferred_profile`
   answer "what forests/domains exist?" and "which profile should I use?" in one
   call each, instead of the model having to stitch together `/infrastructures`,
@@ -113,6 +121,14 @@ orchestrator can answer by composing these tools:
 - *"Find accounts that are kerberoastable, privileged, and weak all at once."* —
   `query_ad_objects('admincount>0 AND serviceprincipalname:"/" AND isweak=true')`
   — the drop-everything findings, in one expression.
+- *"What's the full exposure picture for `jaime.lannister` — everything Tenable
+  flags on him, everywhere he's the risky party, sorted worst-first?"* —
+  `get_identity_360({ samAccountName: "jaime.lannister" })`; returns his own
+  deviances **plus** the ones where he holds dangerous rights over other objects
+  **plus** what he inherits from his containers, each with a Tenable deeplink.
+- *"For these 5 users on an attack path, show me each one's Critical/High/Medium/
+  Low deviance counts."* — `get_identity_360_summary({ identities: [...] })` in a
+  single call for the badges, then drill into any one with `get_identity_360`.
 
 ### Permission decoding
 
@@ -240,6 +256,57 @@ Notes and honest limits:
   extra API calls. Set `TIE_BUILD_GRAPH=true` to build it in the background at
   startup; otherwise the first graph query builds it (and may take tens of
   seconds on a large tenant). See [docs/CONTROL_GRAPH_DESIGN.md](docs/CONTROL_GRAPH_DESIGN.md).
+
+### Identity 360 (deviance view)
+
+Indicators of Exposure are how Tenable flags misconfigurations, but each deviance
+is filed against exactly **one** object — usually the *victim*. That makes a
+"what is this identity exposed to?" question surprisingly hard to answer from the
+console, because the same identity can be dangerous or exposed in three different
+ways that the per-object view never unifies. `get_identity_360` resolves all
+three **layers** for one object:
+
+1. **`target`** — deviances Tenable filed directly on the object (its own view).
+2. **`trustee`** — deviances where the object is the *risky principal embedded in
+   another object's finding* (e.g. the trustee inside a Dangerous-ACE list on a
+   victim, or on a root partition). These never appear under the object in
+   Tenable, because the deviance belongs to the victim.
+3. **`inherited`** — deviances on a container / partition the object sits under,
+   whose exposure inherits down; resolved by walking up the control graph's
+   `Contains` edges (builds the graph on first use).
+
+Each returned deviance is **self-contained and enriched**: checker + reason
+metadata, the **severity** (raw `O-CRITICITY` *and* the Critical/High/Medium/Low
+band), the **remediation cost** (raw *and* Low/Medium/High band), the related
+`counterpart` object (for trustee/inherited layers), granted rights, resolved/
+ignored state, and a **deeplink** into the Tenable IOE page plus a
+`deeplinkFilterHint` (`id:"<adObjectId>"`) to narrow the on-page filter to the
+exact object. Results are sorted worst-first (severity band, then raw criticity,
+then remediation cost).
+
+```typescript
+// Full, sorted, deep-linked findings for one identity (all three layers).
+get_identity_360({ samAccountName: "jaime.lannister" })
+
+// Batch roll-up: per-identity counts by severity band (for report badges),
+// NO full lists. Mix DN / SID / samAccountName / objectId; unresolved inputs
+// come back flagged rather than failing the batch.
+get_identity_360_summary({ identities: ["jaime.lannister", "S-1-5-...", 44656] })
+```
+
+Notes:
+
+- **Severity is profile-specific.** `O-CRITICITY` and `O-ENABLED` are per-profile
+  (and can be overridden per-directory); omit `profileId` to use your preferred
+  profile. Deviances from checkers **disabled** in the profile/directory are
+  excluded by default and reported in a separate `summary.suppressed` tally — so
+  nothing is silently dropped.
+- **Cached deviance index.** All deviances are scanned once (profile-scoped) and
+  cached behind the same TTL as the object snapshot; `refresh: true` forces a
+  rescan. The summary and detail tools share the index, so a badge from
+  `get_identity_360_summary` always matches the expanded `get_identity_360` view.
+- **Facts, not verdicts.** The tools translate Tenable's own numbers into bands
+  and surface the relationships; they don't re-score risk.
 
 ### Freshness and caching
 

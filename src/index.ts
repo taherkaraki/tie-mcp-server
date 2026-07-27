@@ -35,7 +35,12 @@ async function main() {
   const tieClient = new TIEClient(config);
 
   // Inject cache configuration before any tool call creates the shared store.
-  configureStore({ ttlMs: config.cacheTtlMs, baseUrl: config.baseUrl });
+  configureStore({
+    ttlMs: config.cacheTtlMs,
+    baseUrl: config.baseUrl,
+    warmConcurrency: config.warmConcurrency,
+    warmChunk: config.warmChunk,
+  });
 
   const activeTools = filterTools(tools);
   const activeCustomTools = filterTools(customTools);

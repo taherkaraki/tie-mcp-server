@@ -70,7 +70,11 @@ let consoleBaseUrl = '';
 
 /** Configure the shared store before first use (called once at startup). */
 export function configureStore(options: StoreOptions & { baseUrl?: string }): void {
-  storeOptions = { ttlMs: options.ttlMs };
+  storeOptions = {
+    ttlMs: options.ttlMs,
+    warmConcurrency: options.warmConcurrency,
+    warmChunk: options.warmChunk,
+  };
   if (options.baseUrl) consoleBaseUrl = options.baseUrl;
 }
 

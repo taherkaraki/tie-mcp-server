@@ -52,11 +52,12 @@ export interface StoredADObject {
   raw: RawADObject;
 }
 
-/** Page size TIE returns; also our "last page" heuristic. */
-const PAGE_SIZE = 1000;
-
-/** Safety cap so a broken cursor can't loop forever. */
+/** Safety cap, per scan worker, so a broken cursor can't loop forever. */
 const MAX_PAGES = 200;
+
+/** Defaults for the parallel warm scan (see StoreOptions). */
+const DEFAULT_WARM_CONCURRENCY = 5;
+const DEFAULT_WARM_CHUNK = 5000;
 
 /** Default snapshot lifetime: 1 day. AD/TIE state changes slowly relative to a
  * session, and a full rescan is expensive, so we favour cheap reuse and let
@@ -66,6 +67,10 @@ export const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export interface StoreOptions {
   /** How long a built snapshot stays valid, in ms. Default {@link DEFAULT_TTL_MS}. */
   ttlMs?: number;
+  /** Concurrent workers for the parallel id-window scan. Default 5. */
+  warmConcurrency?: number;
+  /** id-window size handed to each scan worker. Default 5000. */
+  warmChunk?: number;
 }
 
 /**
@@ -89,12 +94,16 @@ export class ADObjectStore {
   private builtAt = 0;
   private building: Promise<void> | null = null;
   private readonly ttlMs: number;
+  private readonly warmConcurrency: number;
+  private readonly warmChunk: number;
 
   constructor(
     private readonly client: TIEClient,
     options: StoreOptions = {}
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.warmConcurrency = Math.max(1, options.warmConcurrency ?? DEFAULT_WARM_CONCURRENCY);
+    this.warmChunk = Math.max(1000, options.warmChunk ?? DEFAULT_WARM_CHUNK);
   }
 
   /** True when we have a snapshot that hasn't expired (ttlMs of 0 is never fresh). */
@@ -137,37 +146,121 @@ export class ADObjectStore {
     return this.ensureLoaded(false, onProgress);
   }
 
-  /** Page through every ad-object and normalize it into the store. */
-  private async build(onProgress?: ScanProgress): Promise<void> {
-    const collected: StoredADObject[] = [];
-    let lastId = 0;
-    let pages = 0;
+  /**
+   * Fetch one page of ad-objects at cursor `lastId`. Returns the raw batch and
+   * the NEXT cursor parsed from `_links.next` (the page's max id, authoritative
+   * — the returned array is NOT sorted by id, so batch[last].id is wrong for
+   * windowed scanning). `next` is null at the end of the directory.
+   */
+  private async page(
+    lastId: number
+  ): Promise<{ batch: RawADObject[]; next: number | null }> {
+    const resp = await this.client.get<{
+      _embedded?: { 'ad-objects'?: RawADObject[]; 'ad-object'?: RawADObject[] };
+      _links?: { next?: string };
+    }>(`/api/ad-objects?lastIdentifierSeen=${lastId}`);
+    const batch = resp._embedded?.['ad-objects'] ?? resp._embedded?.['ad-object'] ?? [];
+    let next: number | null = null;
+    const nextUrl = resp._links?.next;
+    if (nextUrl) {
+      // `next` may be absolute or relative; parse the query param either way.
+      const m = /[?&]lastIdentifierSeen=(\d+)/.exec(nextUrl);
+      const n = m ? Number(m[1]) : NaN;
+      if (Number.isFinite(n) && n > lastId) next = n; // must advance
+    }
+    return { batch, next };
+  }
 
+  /**
+   * Drain one id-window [start, end): page from `start`, following the server's
+   * `_links.next` cursor, appending raw objects, until the cursor passes `end`
+   * (hand off to the next window) or the directory ends (`next == null`).
+   * Returns the objects fetched and the last `next` cursor seen (null = the
+   * worker reached the global end, i.e. no more objects exist beyond here).
+   */
+  private async fetchWindow(
+    start: number,
+    end: number,
+    sink: (raw: RawADObject) => void,
+    onPage: () => void
+  ): Promise<{ reachedGlobalEnd: boolean }> {
+    let cursor = start;
+    let pages = 0;
     while (pages < MAX_PAGES) {
       pages++;
-      const resp = await this.client.get<{
-        _embedded?: {
-          'ad-objects'?: RawADObject[];
-          'ad-object'?: RawADObject[];
-        };
-      }>(`/api/ad-objects?lastIdentifierSeen=${lastId}`);
-
-      // Runtime uses the plural key; the OpenAPI schema names it singular.
-      const batch =
-        resp._embedded?.['ad-objects'] ?? resp._embedded?.['ad-object'] ?? [];
-      if (batch.length === 0) break;
-
-      for (const raw of batch) collected.push(this.toStored(raw));
-      onProgress?.({ pages, objects: collected.length });
-
-      const newLast = batch[batch.length - 1].id;
-      if (newLast === lastId) break; // cursor not advancing; avoid infinite loop
-      lastId = newLast;
-
-      if (batch.length < PAGE_SIZE) break; // last (partial) page
+      const { batch, next } = await this.page(cursor);
+      for (const raw of batch) sink(raw);
+      onPage();
+      if (next === null) return { reachedGlobalEnd: true }; // directory end
+      cursor = next;
+      if (cursor >= end) return { reachedGlobalEnd: false }; // window done
     }
+    return { reachedGlobalEnd: false }; // safety cap hit; let dispenser continue
+  }
 
-    this.objects = collected;
+  /**
+   * Parallel id-window scan. A shared dispenser hands out window starts in
+   * `warmChunk` steps (0, C, 2C, …); `warmConcurrency` workers each claim the
+   * next start and drain its window. Windows cover disjoint id>N ranges and id
+   * is unique, so the union == the full sequential set; a Map keyed by id
+   * absorbs the small boundary overlap idempotently.
+   *
+   * Robust termination (handles sparse id spaces): we do NOT stop merely because
+   * one window came back empty — a gap in the id space would falsely signal end.
+   * Instead we track `frontier`, the highest window-start known to still have
+   * data (any page returned objects, or `next` advanced past the window). The
+   * dispenser keeps handing out starts until every claimed window at or below an
+   * empty one is exhausted AND a worker has seen the true directory end
+   * (`next == null`) OR all outstanding windows past the frontier came back
+   * empty. Concretely: once a worker sees `next == null`, that id is the global
+   * max; no start beyond it is dispensed, and in-flight higher windows resolve
+   * empty and are discarded.
+   */
+  private async fetchAllParallel(onProgress?: ScanProgress): Promise<RawADObject[]> {
+    const byId = new Map<number, RawADObject>();
+    const chunk = this.warmChunk;
+    let nextStart = 0; // dispenser cursor (in ids)
+    let globalMax = Number.POSITIVE_INFINITY; // set when a worker hits next==null
+    let pagesFetched = 0;
+
+    const sink = (raw: RawADObject) => byId.set(raw.id, raw);
+    const onPage = () => {
+      pagesFetched++;
+      onProgress?.({ pages: pagesFetched, objects: byId.size });
+    };
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const start = nextStart;
+        // Don't dispense a window at or past the known directory end. globalMax
+        // is the END of the window that saw next==null, and next==null means no
+        // object has id > the last fetched id (which is < that window end), so
+        // no object has id >= globalMax — skipping start >= globalMax is safe.
+        if (start >= globalMax) return;
+        nextStart += chunk;
+        const { reachedGlobalEnd } = await this.fetchWindow(
+          start,
+          start + chunk,
+          sink,
+          onPage
+        );
+        if (reachedGlobalEnd) {
+          // This window saw next==null: the last id it fetched is the global
+          // max. Clamp the dispenser so no worker claims a higher window.
+          globalMax = Math.min(globalMax, start + chunk);
+        }
+      }
+    };
+
+    const n = Math.max(1, this.warmConcurrency);
+    await Promise.all(Array.from({ length: n }, () => worker()));
+    return [...byId.values()];
+  }
+
+  /** Page through every ad-object (in parallel) and normalize it into the store. */
+  private async build(onProgress?: ScanProgress): Promise<void> {
+    const raw = await this.fetchAllParallel(onProgress);
+    this.objects = raw.map((r) => this.toStored(r));
 
     // Credential-weakness enrichment: fold each passwordHashScan companion
     // object onto the principal it describes (joined by distinguishedName), so
@@ -176,14 +269,14 @@ export class ADObjectStore {
     // of the control graph, not the store) but contribute their signal here.
     // (Phase 5a, CONTROL_GRAPH_DESIGN §10.3)
     const scanByDn = new Map<string, QueryRecord>();
-    for (const obj of collected) {
+    for (const obj of this.objects) {
       if (!hasObjectClass(obj.record, PASSWORD_HASH_SCAN_CLASS)) continue;
       const dn = obj.record['distinguishedname'];
       // Only Retrieved scans carry meaningful flags; skip empty-DN records.
       if (typeof dn === 'string' && dn) scanByDn.set(dn.toLowerCase(), obj.record);
     }
     if (scanByDn.size > 0) {
-      for (const obj of collected) {
+      for (const obj of this.objects) {
         if (hasObjectClass(obj.record, PASSWORD_HASH_SCAN_CLASS)) continue; // don't self-enrich
         const dn = obj.record['distinguishedname'];
         if (typeof dn !== 'string' || !dn) continue;
@@ -211,7 +304,7 @@ export class ADObjectStore {
     // Rebuild the SID index and invalidate the derived schema map so both
     // reflect the new snapshot generation.
     this.sidIndex = new Map();
-    for (const obj of collected) {
+    for (const obj of this.objects) {
       const sid = obj.record['objectsid'];
       if (typeof sid === 'string') {
         const name =

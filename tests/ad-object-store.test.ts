@@ -26,13 +26,18 @@ function obj(id: number, directoryId: number, attrs: RawAttr[], type = 'LDAP') {
  */
 function makePagingClient(all: ReturnType<typeof obj>[], pageSize = 1000) {
   let getCount = 0;
+  const maxId = all.reduce((m, o) => Math.max(m, o.id), 0);
   const client = {
     get(path: string) {
       getCount++;
       const m = path.match(/lastIdentifierSeen=(\d+)/);
       const lastId = m ? Number(m[1]) : 0;
       const batch = all.filter((o) => o.id > lastId).slice(0, pageSize);
-      return Promise.resolve({ _embedded: { 'ad-objects': batch } });
+      // Mirror real TIE: _links.next carries the page's MAX id, and is absent
+      // once the directory is exhausted (no objects beyond this page's max).
+      const pageMax = batch.reduce((mx, o) => Math.max(mx, o.id), lastId);
+      const links = pageMax < maxId ? { next: `/api/ad-objects?lastIdentifierSeen=${pageMax}` } : {};
+      return Promise.resolve({ _embedded: { 'ad-objects': batch }, _links: links });
     },
   } as unknown as TIEClient;
   return { client, getCalls: () => getCount };
@@ -110,7 +115,9 @@ test('paginates across multiple pages via the cursor', async () => {
     obj(i + 1, 1, [{ name: 'admincount', value: String(i % 2), valueType: 'integer' }])
   );
   const { client, getCalls } = makePagingClient(many, 1000);
-  const store = new ADObjectStore(client);
+  // Pin one worker so page counts test the sequential cursor contract; the
+  // parallel path's correctness is covered by the object-count assertions.
+  const store = new ADObjectStore(client, { warmConcurrency: 1 });
 
   const res = await store.query('admincount>0');
   assert.equal(getCalls(), 3, 'should page exactly three times');
@@ -143,7 +150,7 @@ test('onProgress fires once per page with cumulative counts', async () => {
     obj(i + 1, 1, [{ name: 'cn', value: `"o${i}"`, valueType: 'string' }])
   );
   const { client } = makePagingClient(many, 1000);
-  const store = new ADObjectStore(client);
+  const store = new ADObjectStore(client, { warmConcurrency: 1 });
 
   const events: Array<{ pages: number; objects: number }> = [];
   await store.query('type=LDAP', { onProgress: (info) => events.push(info) });

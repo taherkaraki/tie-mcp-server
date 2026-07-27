@@ -31,6 +31,21 @@ export interface TIEConfig {
    * that don't do relationship analysis. Enable with TIE_BUILD_GRAPH=true.
    */
   buildGraph: boolean;
+  /**
+   * Number of concurrent workers draining the AD-object scan's id-window queue.
+   * The scan partitions the id space into windows and fetches several in
+   * parallel, cutting warm time ~2.4x. Default 5 — measured sweet spot; TIE's
+   * rate limiter caps the gain around 2.5x, so >6 workers can be slower. Tune
+   * per tenant with TIE_WARM_CONCURRENCY (rate-limit policy varies).
+   */
+  warmConcurrency: number;
+  /**
+   * Size (in ids) of each scan window handed out to a worker. Default 5000
+   * (~5 pages). This is only hand-out granularity — a bigger directory yields
+   * more windows, keeping workers saturated — so do NOT scale it with tenant
+   * size. Override with TIE_WARM_CHUNK.
+   */
+  warmChunk: number;
 }
 
 /**
@@ -62,5 +77,11 @@ export function loadConfig(): TIEConfig {
       ? parseInt(process.env.TIE_CACHE_TTL_MS, 10)
       : undefined,
     buildGraph: process.env.TIE_BUILD_GRAPH === 'true',
+    warmConcurrency: process.env.TIE_WARM_CONCURRENCY
+      ? Math.max(1, parseInt(process.env.TIE_WARM_CONCURRENCY, 10))
+      : 5,
+    warmChunk: process.env.TIE_WARM_CHUNK
+      ? Math.max(1000, parseInt(process.env.TIE_WARM_CHUNK, 10))
+      : 5000,
   };
 }

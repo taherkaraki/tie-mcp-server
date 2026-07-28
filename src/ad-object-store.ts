@@ -24,6 +24,7 @@ import { normalizeAttributeValue, type NormalizedValue } from './query/value.js'
 import { parseQuery } from './query/parser.js';
 import { evaluate, type QueryRecord } from './query/evaluate.js';
 import { buildSchemaMap, type SchemaMap } from './graph/schema-map.js';
+import { consolidate } from './consolidate.js';
 import { ControlGraph, type GraphProgress } from './graph/graph.js';
 import {
   hasObjectClass,
@@ -83,6 +84,15 @@ export type ScanProgress = (info: { pages: number; objects: number }) => void;
 
 export class ADObjectStore {
   private objects: StoredADObject[] = [];
+  /**
+   * Consolidated projection of {@link objects} — one record per real directory
+   * object (scan/reuse companions dropped, phantom computer shells dropped,
+   * same-guid twins collapsed to the richest). Built lazily from the raw
+   * snapshot and reused; the tools query THIS, while the control graph and
+   * schema map keep reading the raw `objects` (they do their own filtering and
+   * rely on the synthetic rows). Null = not built for the current generation.
+   */
+  private consolidated: StoredADObject[] | null = null;
   /** objectSid (lower-case) -> display name, for resolving ACE trustees. */
   private sidIndex = new Map<string, string>();
   /** Lazily built GUID -> schema name map (from the resident schema objects). */
@@ -317,9 +327,31 @@ export class ADObjectStore {
     }
     this.schemaMap = null;
 
-    // A new snapshot invalidates any derived control graph.
+    // A new snapshot invalidates the consolidated projection and any derived
+    // control graph.
+    this.consolidated = null;
     this.graph = null;
     this.graphState = 'absent';
+  }
+
+  /**
+   * The consolidated view (one record per real object), built lazily from the
+   * raw snapshot and cached for this generation. See {@link consolidated}.
+   */
+  private consolidatedObjects(): StoredADObject[] {
+    if (!this.consolidated) this.consolidated = consolidate(this.objects);
+    return this.consolidated;
+  }
+
+  /**
+   * Eagerly build the consolidated projection (the "dedup" stage) and report the
+   * raw vs consolidated counts. Lets startup surface deduping as its own stage
+   * and makes the first query fast. No-op cost if already built this generation.
+   */
+  ensureConsolidated(): { rawCount: number; count: number; removed: number } {
+    const rawCount = this.objects.length;
+    const count = this.consolidatedObjects().length;
+    return { rawCount, count, removed: rawCount - count };
   }
 
   /** Resolve an object SID to a display name from the resident snapshot. */
@@ -415,7 +447,7 @@ export class ADObjectStore {
     await this.ensureLoaded(opts.force ?? false, opts.onProgress);
 
     const matches: StoredADObject[] = [];
-    for (const obj of this.objects) {
+    for (const obj of this.consolidatedObjects()) {
       if (evaluate(ast, obj.record)) matches.push(obj);
     }
 
@@ -438,28 +470,37 @@ export class ADObjectStore {
       by === 'dn' ? 'distinguishedname' : by === 'sid' ? 'objectsid' : 'samaccountname';
     const target = value.trim().toLowerCase();
 
-    for (const obj of this.objects) {
+    for (const obj of this.consolidatedObjects()) {
       const v = obj.record[field];
       if (typeof v === 'string' && v.toLowerCase() === target) return obj;
     }
     return null;
   }
 
-  /** Snapshot metadata for diagnostics / tool responses. */
+  /**
+   * Snapshot metadata for diagnostics / tool responses. `count` is the
+   * consolidated object count (what the tools actually see — one record per real
+   * object); `rawCount` is the unconsolidated snapshot size (TIE's raw rows).
+   */
   stats(): {
     count: number;
+    rawCount: number;
     builtAt: number;
     ageMs: number;
     ttlMs: number;
     fresh: boolean;
   } {
     const now = Date.now();
+    const fresh = this.isFresh(now);
     return {
-      count: this.objects.length,
+      // Only compute the consolidated view if a snapshot exists; a cold store
+      // reports 0 without forcing a build.
+      count: this.objects.length > 0 ? this.consolidatedObjects().length : 0,
+      rawCount: this.objects.length,
       builtAt: this.builtAt,
       ageMs: this.builtAt ? now - this.builtAt : -1,
       ttlMs: this.ttlMs,
-      fresh: this.isFresh(now),
+      fresh,
     };
   }
 }

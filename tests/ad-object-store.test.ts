@@ -207,6 +207,52 @@ test('warm() builds the snapshot up front and is reused by later queries', async
   assert.equal(getCalls(), afterWarm, 'query after warm must not re-scan');
 });
 
+test('query/lookup return consolidated objects (dedup twins, drop scan + phantom)', async () => {
+  const g = 'aaaaaaaa-1111-2222-3333-444444444444';
+  const objs = [
+    // real computer (rich, has SID + sam)
+    obj(1, 1, [
+      { name: 'objectclass', value: '["top","person","user","computer"]', valueType: 'array/string' },
+      { name: 'objectguid', value: `"${g}"`, valueType: 'string' },
+      { name: 'objectsid', value: '"S-1-5-21-9-9-9-1105"', valueType: 'string' },
+      { name: 'samaccountname', value: '"HOST1$"', valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=HOST1,OU=Real,DC=x,DC=y"', valueType: 'string' },
+      { name: 'operatingsystem', value: '"Windows"', valueType: 'string' },
+    ]),
+    // sparse same-guid twin (should collapse into the rich one)
+    obj(2, 1, [
+      { name: 'objectclass', value: '["computer"]', valueType: 'array/string' },
+      { name: 'objectguid', value: `"${g}"`, valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=HOST1,CN=Computers,DC=x,DC=y"', valueType: 'string' },
+    ]),
+    // phantom shell: computer, distinct guid, no SID, no sam (dropped)
+    obj(3, 1, [
+      { name: 'objectclass', value: '["top","user","computer"]', valueType: 'array/string' },
+      { name: 'objectguid', value: '"bbbbbbbb-0000-0000-0000-000000000000"', valueType: 'string' },
+      { name: 'distinguishedname', value: '"CN=HOST1,CN=Computers,DC=x,DC=y"', valueType: 'string' },
+    ]),
+    // passwordHashScan companion for HOST1 (folded onto principal, row dropped)
+    obj(4, 1, [
+      { name: 'objectclass', value: '["passwordHashScan"]', valueType: 'array/string' },
+      { name: 'distinguishedname', value: '"CN=HOST1,OU=Real,DC=x,DC=y"', valueType: 'string' },
+      { name: 'isbreached', value: 'true', valueType: 'boolean' },
+    ]),
+  ];
+  const { client } = makePagingClient(objs);
+  const store = new ADObjectStore(client);
+
+  const { total, returned } = await store.query('objectclass:"computer"', { limit: 0 });
+  assert.equal(total, 1, 'six raw rows for one machine collapse to one');
+  assert.equal(returned[0].record['samaccountname'], 'HOST1$');
+  assert.equal(returned[0].record['operatingsystem'], 'Windows', 'richest twin wins');
+  assert.equal(returned[0].record['isbreached'], true, 'credential fold survives consolidation');
+
+  // stats surfaces both raw and consolidated counts
+  const s = store.stats();
+  assert.equal(s.rawCount, 4);
+  assert.equal(s.count, 1);
+});
+
 test('buildGraph builds after load and reports ready with stats', async () => {
   const { client } = makePagingClient(sampleObjects);
   const store = new ADObjectStore(client);

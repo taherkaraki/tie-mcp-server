@@ -253,3 +253,55 @@ test('displayName resolves domain (dnsRoot) and OU names, not raw keys (Phase 6)
   assert.equal(g.node('9:ou-guid')?.name, 'OU:Servers'); // OU via ou attr
   assert.equal(g.node('9:gpo-guid')?.name, '{POL}'); // GPO via leaf RDN fallback
 });
+
+test('phantom computer shells are excluded from the graph; real computers and reuse hubs are kept', () => {
+  // A real computer (has SID + sam), a phantom shell (computer, no SID/sam, in
+  // the default Computers container), and a passwordHashReuse row grouping two
+  // principals by guid. Phantom -> no node; real -> node; reuse row -> hub node.
+  const real = obj(
+    {
+      objectsid: 'S-1-5-21-7-7-7-1200',
+      samaccountname: 'HOST1$',
+      cn: 'HOST1',
+      objectguid: 'aaaa-1111',
+      distinguishedname: 'CN=HOST1,OU=Real,DC=x',
+      objectclass: ['top', 'person', 'user', 'computer'],
+    },
+    '1:host1'
+  );
+  const other = obj(
+    {
+      objectsid: 'S-1-5-21-7-7-7-1201',
+      samaccountname: 'HOST2$',
+      objectguid: 'aaaa-2222',
+      distinguishedname: 'CN=HOST2,OU=Real,DC=x',
+      objectclass: ['top', 'person', 'user', 'computer'],
+    },
+    '1:host2'
+  );
+  const phantom = obj(
+    {
+      objectguid: 'bbbb-9999',
+      distinguishedname: 'CN=HOST1,CN=Computers,DC=x',
+      objectclass: ['top', 'person', 'user', 'computer'],
+    },
+    '1:phantom'
+  );
+  const reuse = obj(
+    {
+      objectclass: ['passwordHashReuse'],
+      prefix: '31D6C',
+      reusedwithindomain: JSON.stringify({ '1': ['aaaa-1111', 'aaaa-2222'] }),
+    },
+    '1:reuse'
+  );
+
+  const g = ControlGraph.build([real, other, phantom, reuse]);
+  assert.ok(g.node('s-1-5-21-7-7-7-1200'), 'real computer HOST1 present');
+  assert.ok(g.node('s-1-5-21-7-7-7-1201'), 'real computer HOST2 present');
+  assert.equal(g.node('1:phantom'), undefined, 'phantom shell has no node');
+  // The reuse row itself is not a principal node, but it produces a hub node
+  // linking the two members — proving synthetic reuse rows are still consumed.
+  const hubs = [...g.allNodeKeys()].filter((k) => g.node(k)?.type === 'passwordReuseCluster');
+  assert.equal(hubs.length, 1, 'reuse cluster hub built from the synthetic row');
+});

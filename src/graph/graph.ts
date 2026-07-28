@@ -23,6 +23,7 @@
 import type { StoredADObject } from '../ad-object-store.js';
 import { edgesForObject, nodeKeyFor, type EdgeKind, type RawEdge } from './edges.js';
 import { isSyntheticObject, reuseClusterFrom } from './credentials.js';
+import { isPhantomShell } from '../consolidate.js';
 
 /** A resolved edge between two node keys. */
 export interface Edge {
@@ -87,7 +88,16 @@ export class ControlGraph {
       // are data ABOUT principals, not principals, and share a principal's DN —
       // admitting them as nodes produced bogus edges (e.g. fake Tier-0 members).
       // Their signal is folded onto principals in the store layer (§10.2/10.3).
+      // NOTE: passwordHashReuse rows are still consumed in pass 3 below (they
+      // iterate `objects` directly), so skipping here only excludes them as nodes.
       if (isSyntheticObject(obj.record)) continue;
+
+      // Skip phantom computer shells: guid-only artifacts (computer class, no
+      // objectSid, no samAccountName) that AD has no counterpart for. They are
+      // inert in the graph — zero outbound edges, only an inbound `Contains`
+      // from their default container — so excluding them changes no traversal
+      // result while dropping thousands of dead-leaf nodes on large tenants.
+      if (isPhantomShell(obj)) continue;
 
       const key = nodeKeyFor(obj);
       const sid = strField(obj, 'objectsid');

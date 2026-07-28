@@ -138,33 +138,45 @@ async function main() {
   //      search goes live first and graph analysis overlaps with real work.
   if (config.warmCache || config.buildGraph) {
     const store = getSharedStore(tieClient);
+    // Stage labels make the startup phases legible in the console. The graph
+    // stage only runs under TIE_BUILD_GRAPH, so the count adapts.
+    const stageCount = config.buildGraph ? 3 : 2;
     const warmStep = config.warmCache
       ? (() => {
-          console.error('Warming AD object cache (set TIE_WARM_CACHE=false to disable)...');
+          console.error(
+            `[1/${stageCount}] Warming AD object cache (set TIE_WARM_CACHE=false to disable)...`
+          );
           return store
             .warm(({ pages, objects }) => {
               if (pages % 10 === 0) {
-                console.error(`  warmed ${objects} objects (${pages} pages)`);
+                console.error(`        …fetched ${objects} objects (${pages} pages)`);
               }
             })
-            .then(() => console.error('AD object cache warm.'));
+            .then(() => {
+              // Stage 2: consolidate raw rows into one record per real object.
+              console.error('[2/' + stageCount + '] Deduping snapshot (one record per real object)...');
+              const { rawCount, count, removed } = store.ensureConsolidated();
+              console.error(
+                `        AD cache ready: ${count} objects (${removed} duplicate/phantom/scan rows removed from ${rawCount}).`
+              );
+            });
         })()
       : Promise.resolve();
 
     warmStep
       .then(() => {
         if (!config.buildGraph) return;
-        console.error('Building control graph (TIE_BUILD_GRAPH=true)...');
+        console.error(`[3/${stageCount}] Building control graph (TIE_BUILD_GRAPH=true)...`);
         return store
           .buildGraph(({ processed, total }) => {
             if (processed % 10000 === 0 || processed === total) {
-              console.error(`  graph: ${processed}/${total} objects processed`);
+              console.error(`        …processed ${processed}/${total} objects`);
             }
           })
           .then(() => {
             const s = store.graphStatus().stats;
             console.error(
-              `Control graph ready: ${s?.nodes} nodes, ${s?.edges} edges` +
+              `        Control graph ready: ${s?.nodes} nodes, ${s?.edges} edges` +
                 (s?.dangling ? ` (${s.dangling} out-of-scope refs)` : '')
             );
           });

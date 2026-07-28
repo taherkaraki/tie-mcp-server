@@ -1,18 +1,19 @@
 # TIE MCP — Session Handoff
 
-_Last updated: 2026-07-27_
+_Last updated: 2026-07-28_
 
 ## Where we are
 
-`tie-mcp-server` is on `main` at **v0.6.1** (clean tree, all PR branches
+`tie-mcp-server` is on `main` at **v0.6.2** (clean tree, all PR branches
 fast-forward merged + deleted). It's an MCP server for Tenable Identity Exposure:
 131 auto-generated tools (1:1 with the TIE API) + **10 hand-written custom tools**.
 
 ## ⚠️ Pending action (YOURS)
 
-- **npm publish 0.6.1** — registry still shows **0.6.0** (`npm view tie-mcp-server
-  version`). v0.6.0 (identity-360) and v0.6.1 (parallel warm) are merged to `main`
-  but NOT published. When ready, from repo root on `main`: `! npm publish`.
+- **npm publish** — registry still shows **0.6.0** (`npm view tie-mcp-server
+  version`). v0.6.0 (identity-360), v0.6.1 (parallel warm), and v0.6.2
+  (consolidation) are merged to `main` but NOT published. When ready, from repo
+  root on `main`: `! npm publish` (delivers all three).
   (The consumer project `~/Downloads/tie-attack-report` links the server via
   `file:../../TIE_MCP`, so its adapter gets new server code on `npm run build`
   regardless of npm — but external `npx tie-mcp-server` users are stuck on 0.6.0.)
@@ -27,6 +28,7 @@ fast-forward merged + deleted). It's an MCP server for Tenable Identity Exposure
 - v0.5.7 — `displayName()` resolves SID/GUID→domain/OU/leaf names in the graph
 - **v0.6.0 (PR #10) — identity-360 deviance view** (2 new tools + `DevianceStore`)
 - **v0.6.1 (PR #11) — parallel AD-object warm scan (~2.5x)**
+- **v0.6.2 (PR #12) — consolidate snapshot to one record per real object**
 
 ## The 10 custom tools (src/custom-tools.ts)
 
@@ -83,6 +85,30 @@ space into windows drained by a bounded worker pool: **2.54x** (53.2s→21.0s),
   like `ttlMs`. Scope: fetch only — `buildGraph()` is CPU-bound, left for a
   separate worker-threads effort.
 
+## v0.6.2 — snapshot consolidation (src/consolidate.ts)
+
+TIE returns MULTIPLE raw records per real AD object; tools now return ONE.
+Verified: W12-WS-1 had 6 raw rows → 1. Rules (`consolidate.ts`, pure):
+- drop synthetic `passwordHashScan`/`passwordHashReuse` rows (flags already
+  folded onto the principal in `build()`);
+- drop **phantom computer shells** — `objectclass` includes `computer` + no
+  objectSid + no samAccountName (guid-only stale move-artifacts in default
+  `CN=Computers`). NARROW on purpose: schema/container/GPO/OU objects are also
+  SID-less but REAL — do NOT drop by "no SID" alone;
+- dedup the rest by `objectGuid`, keeping the richest record (most attrs).
+- **Layering:** `this.objects` stays raw; `query`/`lookup` use a lazily-built
+  cached `consolidated` projection (`consolidatedObjects()` / `ensureConsolidated()`).
+  Graph + schema map still read raw `objects`.
+- **Graph** also skips phantom shells as nodes (they were inert: 0 outbound, only
+  an inbound `Contains` — no traversal change), but STILL consumes
+  `passwordHashReuse` rows for reuse hubs. `isPhantomShell` shared from
+  `consolidate.ts` (import is type-only into the store, so no runtime cycle).
+- **Console stages** (index.ts startup): `[1/N] Warming → [2/N] Deduping →
+  [3/N] Building control graph`, each with a completion summary. `stats()` now
+  returns both `count` (consolidated) and `rawCount`.
+- Live: 37,809 → 29,404 objects; graph 35,736 → 30,958 nodes; reuse hubs (9) +
+  tier0 seeds (39) intact.
+
 ## `isweak` semantics (LOCKED — memory `tie-isweak-attribute-unknown`)
 
 Value like `{"1":true,"2":true,"8":true}` → **keys are profile IDs**. `OR` across
@@ -116,6 +142,6 @@ now shows ~900 sources vs July's 493.)
 
 ## Test/build
 
-`npm run build` (tsc), `node --import tsx --test tests/*.test.ts` (**173 tests**).
+`npm run build` (tsc), `node --import tsx --test tests/*.test.ts` (**181 tests**).
 Tools regenerated from OpenAPI via `npm run generate:tools` (never hand-edit
 `src/generated/tools.ts`; custom tools live in `src/custom-tools.ts`).
